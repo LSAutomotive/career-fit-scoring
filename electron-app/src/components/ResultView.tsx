@@ -934,9 +934,7 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
     if (selectedInOrder.length === 0 || !window.electron?.exportCandidatesExcel) return;
     const headers = [
       '이름', '나이', '주소', '최종학력_학교명', '최종학력_학과', '경력_회사명', '경력_부서명', '경력_직전연봉',
-      'AI등급(종합)', '경력적합도', '필수요구사항', '우대사항', '자격증만족도',
-      '등급_상_판정', '등급_중_판정', '등급_하_판정',
-      'AI요약', 'AI의견', '강점', '약점',
+      'AI등급(종합)', '종합점수', '경력적합도', '필수요구사항', '우대사항', '자격증만족도',
     ];
     const rows = selectedInOrder.map(result => {
       const app = result.applicationData;
@@ -953,18 +951,10 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
           age = String(currentYear - birthYear);
         }
       }
-      // AI 검사 결과
+      // AI 검사 결과 (evaluations만 사용)
       const report = result.aiChecked && result.aiReport && typeof result.aiReport === 'object' ? result.aiReport : null;
       const ev = report?.evaluations;
-      const ge = report?.gradeEvaluations;
-      const gradeText = (key: string) => {
-        const g = ge && typeof ge === 'object' ? (ge as Record<string, { satisfied?: boolean; reason?: string }>)[key] : null;
-        if (!g) return '';
-        const s = g.satisfied ? 'O' : 'X';
-        const r = (g.reason || '').trim();
-        return r ? `${s}: ${r}` : s;
-      };
-      const arr = (v: string[] | undefined) => (Array.isArray(v) ? v.join(' | ') : '');
+      const totalScore = result.totalScore != null && result.totalScore > 0 ? String(Math.round(result.totalScore)) : '';
       return [
         (result.name ?? app?.name ?? '').trim(),
         age,
@@ -975,17 +965,11 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
         career.department,
         career.salary,
         result.aiGrade ? aiGradeLabel(result.aiGrade) : '',
+        totalScore,
         (ev?.careerFit ?? '').trim(),
         (ev?.requiredQual ?? '').trim(),
         (ev?.preferredQual ?? '').trim(),
         (ev?.certification ?? '').trim(),
-        gradeText('상'),
-        gradeText('중'),
-        gradeText('하'),
-        (report?.summary ?? '').trim(),
-        (report?.opinion ?? '').trim(),
-        arr(report?.strengths),
-        arr(report?.weaknesses),
       ];
     });
     // 현재 이력서 디렉터리명을 기본 파일명에 포함
