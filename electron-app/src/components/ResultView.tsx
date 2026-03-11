@@ -929,6 +929,40 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
   };
 
   // 엑셀로 내려받기: 선택한 후보를 테이블 순서대로 엑셀 export (기본 정보 + AI 검사 결과)
+  // 종합점수는 result.totalScore가 아니라 화면과 동일하게 aiReport.evaluations + aiGrade + 가중치로 계산 (totalScore는 AI 반영 시 저장되지 않음)
+  const computeDisplayTotalScore = (result: ScoringResult): string => {
+    if (!result.aiChecked || !result.aiReport || typeof result.aiReport !== 'object' || !result.aiReport.evaluations) return '';
+    const evaluations = result.aiReport.evaluations;
+    const weights = userPrompt?.scoringWeights || { career: 100, requirements: 0, preferred: 0, certifications: 0 };
+    const totalWeight = weights.career + weights.requirements + weights.preferred + weights.certifications;
+    const careerRatio = totalWeight > 0 ? weights.career / totalWeight : 0;
+    const requirementsRatio = totalWeight > 0 ? weights.requirements / totalWeight : 0;
+    const preferredRatio = totalWeight > 0 ? weights.preferred / totalWeight : 0;
+    const certificationsRatio = totalWeight > 0 ? weights.certifications / totalWeight : 0;
+    const gradeMap: { [key: string]: number } = { 'A': 100, 'B': 80, 'C': 60 };
+    let careerScore = result.aiGrade ? (gradeMap[result.aiGrade] || 0) : 0;
+    let requiredScore = 0;
+    const requiredQual = evaluations.requiredQual;
+    if (userPrompt?.requiredQualifications?.trim()) {
+      if (requiredQual === '◎') requiredScore = 100;
+      else if (requiredQual === 'X') return '0'; // 필수 불만족 시 최종점수 0
+    }
+    let preferredScore = 0;
+    const preferredQual = evaluations.preferredQual;
+    if (userPrompt?.preferredQualifications?.trim()) {
+      if (preferredQual === '◎') preferredScore = 100;
+      else if (preferredQual === '○') preferredScore = 80;
+    }
+    let certificationScore = 0;
+    const certificationQual = evaluations.certification;
+    if (userPrompt?.requiredCertifications && userPrompt.requiredCertifications.length > 0) {
+      if (certificationQual === '◎') certificationScore = 100;
+      else if (certificationQual === '○') certificationScore = 80;
+    }
+    const total = (careerScore * careerRatio) + (requiredScore * requirementsRatio) + (preferredScore * preferredRatio) + (certificationScore * certificationsRatio);
+    return String(Math.round(total));
+  };
+
   const handleExportExcel = async () => {
     const selectedInOrder = filteredAndSortedResults.filter(r => selectedCandidates.has(r.filePath));
     if (selectedInOrder.length === 0 || !window.electron?.exportCandidatesExcel) return;
@@ -954,7 +988,7 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
       // AI 검사 결과 (evaluations만 사용)
       const report = result.aiChecked && result.aiReport && typeof result.aiReport === 'object' ? result.aiReport : null;
       const ev = report?.evaluations;
-      const totalScore = result.totalScore != null && result.totalScore > 0 ? String(Math.round(result.totalScore)) : '';
+      const totalScore = computeDisplayTotalScore(result);
       return [
         (result.name ?? app?.name ?? '').trim(),
         age,
@@ -1787,16 +1821,16 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
                     careerScore = gradeMap[result.aiGrade] || 0;
                   }
                   
-                  // 2. 필수사항 만족여부 점수 (◎=100, X=불만족, -=0)
+                  // 2. 필수사항 만족여부 점수 (◎=100, X=불만족 시 최종점수 0)
                   let requiredScore = 0;
                   const requiredQual = evaluations.requiredQual;
                   if (userPrompt?.requiredQualifications && userPrompt.requiredQualifications.trim()) {
                     if (requiredQual === '◎') {
                       requiredScore = 100;
                     } else if (requiredQual === 'X') {
-                      // 필수사항 불만족이면 종합 점수 대신 '필수사항 불만족' 표시
-                      return <span className="ai-grade ai-grade-fail" style={{ color: '#ef4444', fontWeight: '600', whiteSpace: 'pre-line' }}>
-                        필수사항{'\n'}불만족
+                      // 필수사항 불만족이면 다른 항목 점수와 관계없이 최종점수 0 표시
+                      return <span className="ai-grade ai-grade-score" style={{ fontWeight: '600', color: '#072761' }}>
+                        0
                       </span>;
                     }
                   }
