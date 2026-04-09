@@ -46,7 +46,7 @@ v1.0.2 Release (새로 생성)
 
 ### 1. GitHub Releases 페이지로 이동
 
-https://github.com/guynamedzuri/career-fit-scoring/releases
+https://github.com/LSAutomotive/career-fit-scoring/releases
 
 ### 2. "Draft a new release" 또는 "Create a new release" 클릭
 

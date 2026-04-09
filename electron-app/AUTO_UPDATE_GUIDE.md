@@ -36,7 +36,7 @@
 
 현재 설정은 **GitHub Releases**를 사용합니다.
 
-- 저장소: `guynamedzuri/career-fit-scoring`
+- 저장소: `LSAutomotive/career-fit-scoring`
 - 업데이트 파일 위치: GitHub Releases의 최신 릴리스
 
 ## 업데이트 배포 방법
@@ -77,7 +77,7 @@ npm run build:win
 
 #### 방법 1: GitHub 웹 인터페이스 사용
 
-1. GitHub 저장소 페이지로 이동: `https://github.com/guynamedzuri/career-fit-scoring`
+1. GitHub 저장소 페이지로 이동: `https://github.com/LSAutomotive/career-fit-scoring`
 2. **Releases** 섹션 클릭
 3. **"Create a new release"** 또는 **"Draft a new release"** 클릭
 4. 다음 정보 입력:
@@ -152,7 +152,7 @@ gh release create v1.0.2 \
    ```yaml
    publish:
      provider: github
-     owner: guynamedzuri
+     owner: LSAutomotive
      repo: career-fit-scoring
    ```
 

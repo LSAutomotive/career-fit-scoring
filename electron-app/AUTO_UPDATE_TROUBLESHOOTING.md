@@ -55,7 +55,7 @@ const handleCheckUpdate = async () => {
 
 브라우저에서:
 ```
-https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest
+https://api.github.com/repos/LSAutomotive/career-fit-scoring/releases/latest
 ```
 
 응답 확인:

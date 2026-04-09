@@ -11,7 +11,7 @@
 다음 사항을 확인하세요:
 
 #### A. Release가 제대로 생성되었는지
-- https://github.com/guynamedzuri/career-fit-scoring/releases
+- https://github.com/LSAutomotive/career-fit-scoring/releases
 - v1.0.2 Release가 존재하는지 확인
 - Release가 "Published" 상태인지 확인 (Draft가 아님)
 
@@ -53,7 +53,7 @@ releaseDate: '...'
 
 개발자 도구 → Network 탭에서:
 - GitHub API 요청이 있는지 확인
-- `https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest` 요청 확인
+- `https://api.github.com/repos/LSAutomotive/career-fit-scoring/releases/latest` 요청 확인
 - 응답 상태 코드 확인 (200이어야 함)
 
 ### 3. 설정 확인
@@ -63,7 +63,7 @@ releaseDate: '...'
 ```yaml
 publish:
   provider: github
-  owner: guynamedzuri
+  owner: LSAutomotive
   repo: career-fit-scoring
 ```
 
@@ -154,7 +154,7 @@ if (autoUpdater) {
 브라우저에서 다음 URL 접속:
 
 ```
-https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest
+https://api.github.com/repos/LSAutomotive/career-fit-scoring/releases/latest
 ```
 
 응답에서:
@@ -180,7 +180,7 @@ https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest
 
 브라우저에서:
 ```
-https://github.com/guynamedzuri/career-fit-scoring/releases
+https://github.com/LSAutomotive/career-fit-scoring/releases
 ```
 
 ### 2. latest.yml 직접 확인

@@ -43,7 +43,7 @@ electron-updater는 기본적으로 `v` 접두사를 기대할 수 있음
 ```typescript
 autoUpdater.setFeedURL({
   provider: 'github',
-  owner: 'guynamedzuri',
+  owner: 'LSAutomotive',
   repo: 'career-fit-scoring'
 });
 ```

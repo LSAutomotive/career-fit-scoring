@@ -58,7 +58,7 @@ npm run generate-latest
 ### 5단계: GitHub Release 생성
 
 1. **GitHub 저장소로 이동**
-   - https://github.com/guynamedzuri/career-fit-scoring
+   - https://github.com/LSAutomotive/career-fit-scoring
    - **Releases** 클릭
 
 2. **"Create a new release" 클릭**

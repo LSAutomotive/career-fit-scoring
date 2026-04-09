@@ -18,7 +18,7 @@ autoUpdater.checkForUpdatesAndNotify() 실행
 
 ```
 1. GitHub Releases API 호출
-   GET https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest
+   GET https://api.github.com/repos/LSAutomotive/career-fit-scoring/releases/latest
    
 2. 최신 릴리스 정보 가져오기
    - tag_name: "v1.0.2"
@@ -149,7 +149,7 @@ if (downloadedHash !== latestYml.files[0].sha512) {
 
 브라우저에서:
 ```
-https://api.github.com/repos/guynamedzuri/career-fit-scoring/releases/latest
+https://api.github.com/repos/LSAutomotive/career-fit-scoring/releases/latest
 ```
 
 응답에서 확인:
