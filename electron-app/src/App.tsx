@@ -185,7 +185,21 @@ function App() {
   };
 
   const handleConfigExecute = async () => {
-    // 검증 통과 시 실행할 로직
+    // API 키 사전 검증: 선택된 모델의 키가 등록되어 있는지 확인
+    const electron = (window as any).electron;
+    if (electron?.getApiKeys) {
+      try {
+        const keys = await electron.getApiKeys();
+        const providerLabel: Record<string, string> = { gpt: 'GPT (OpenAI)', gemini: 'Gemini (Google)', claude: 'Claude (Anthropic)' };
+        if (!keys?.[aiModel]?.verified) {
+          alert(`${providerLabel[aiModel] || aiModel} API 키가 등록되어 있지 않습니다.\n\n"API 키 설정" 버튼을 눌러 키를 등록한 뒤 다시 시도해 주세요.`);
+          return;
+        }
+      } catch (err) {
+        console.error('[App] API key check failed:', err);
+      }
+    }
+
     console.log('실행하기 - 모든 필수 입력 완료');
     console.log('Selected files:', selectedFiles);
     console.log('Job metadata:', jobMetadata);
