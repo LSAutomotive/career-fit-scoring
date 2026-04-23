@@ -80,7 +80,7 @@ export default function JobConfigForm({
   onDocumentTypeChange,
   onJobMetadataChange,
   aiModel = 'gpt',
-  aiModelId = 'gpt-4o',
+  aiModelId = 'gpt-5.4',
 }: JobConfigFormProps) {
   const [documentType, setDocumentType] = useState<'docx' | 'pdf'>(propDocumentType || 'docx');
   const [selectedFolder, setSelectedFolder] = useState<string>(propSelectedFolder || '');

@@ -1252,7 +1252,7 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
             debugFolder: selectedFolder || undefined,
             batchSize: BATCH_SIZE,
             aiModel: aiModel || 'gpt',
-            aiModelId: aiModelId || 'gpt-4o',
+            aiModelId: aiModelId || 'gpt-5.4',
           });
         } finally {
           if (typeof unsubProgress === 'function') unsubProgress();

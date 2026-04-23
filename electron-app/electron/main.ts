@@ -1600,7 +1600,7 @@ ipcMain.handle('verify-api-key', async (_event, model: string, apiKey: string) =
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Hi' }], max_tokens: 5 }),
+        body: JSON.stringify({ model: 'gpt-5.4-nano', messages: [{ role: 'user', content: 'Hi' }], max_tokens: 5 }),
       });
       if (res.ok) { success = true; message = 'GPT API 키 검증 성공'; }
       else {
@@ -1608,7 +1608,7 @@ ipcMain.handle('verify-api-key', async (_event, model: string, apiKey: string) =
         message = `GPT API 오류 (${res.status}): ${errText.slice(0, 200)}`;
       }
     } else if (model === 'gemini') {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: 'Hi' }] }] }),
@@ -1626,7 +1626,7 @@ ipcMain.handle('verify-api-key', async (_event, model: string, apiKey: string) =
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify({ model: 'claude-3-5-haiku-20241022', max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
+        body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
       });
       if (res.ok) { success = true; message = 'Claude API 키 검증 성공'; }
       else {
@@ -3345,7 +3345,7 @@ async function callAIAndParse(
 }> {
   const MAX_RETRIES = 1;
   const provider = aiModel || 'gpt';
-  const modelId = aiModelId || 'gpt-4o';
+  const modelId = aiModelId || 'gpt-5.4';
 
   try {
     console.log(`[AI Check] Calling ${provider} API (${modelId}) for: ${fileName}${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
@@ -3906,7 +3906,7 @@ async function callAIAndParseBatch(
 ): Promise<Array<{ success: boolean; grade: string; report: any; reportParsed: boolean; fileName: string; error?: string }>> {
   const MAX_RETRIES = 1;
   const provider = aiModel || 'gpt';
-  const modelId = aiModelId || 'gpt-4o';
+  const modelId = aiModelId || 'gpt-5.4';
 
   const emptyResult = (fileName: string, error: string) => ({
     success: false,
@@ -4036,7 +4036,7 @@ ipcMain.handle('ai-check-resume', async (event, data: {
 }) => {
   try {
     const selectedModel = data.aiModel || 'gpt';
-    const selectedModelId = data.aiModelId || 'gpt-4o';
+    const selectedModelId = data.aiModelId || 'gpt-5.4';
     const modelKey = getModelApiKey(selectedModel);
     if (!modelKey) {
       throw new Error(`${selectedModel} API 키가 설정되지 않았거나 검증되지 않았습니다. API 키 설정에서 키를 등록해 주세요.`);
@@ -4142,7 +4142,7 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
   let lastSystemPrompt = '';
   let lastUserPromptText = '';
   const selectedModel = data.aiModel || 'gpt';
-  const selectedModelId = data.aiModelId || 'gpt-4o';
+  const selectedModelId = data.aiModelId || 'gpt-5.4';
 
   const sendProgress = (batchIndex: number, results: typeof allResults, chunk: typeof items, systemPrompt: string, userPromptText: string, completedCount: number) => {
     try {
@@ -4276,7 +4276,7 @@ ipcMain.handle('get-ai-prompts-preview', async (event, data: { userPrompt: any; 
 ipcMain.handle('generate-grade-criteria', async (event, jobDescription: string, aiModel?: string, aiModelId?: string) => {
   try {
     const provider = aiModel || 'gpt';
-    const modelId = aiModelId || 'gpt-4o';
+    const modelId = aiModelId || 'gpt-5.4';
     const modelKey = getModelApiKey(provider);
     if (!modelKey) {
       throw new Error(`${provider} API 키가 설정되지 않았거나 검증되지 않았습니다. API 키 설정에서 키를 등록해 주세요.`);

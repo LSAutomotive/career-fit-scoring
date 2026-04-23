@@ -12,23 +12,24 @@ type ViewMode = 'config' | 'result';
 
 const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string }>> = {
   gpt: [
-    { id: 'gpt-4o', label: 'GPT-4o' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
     { id: 'gpt-5.4', label: 'GPT-5.4' },
     { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
     { id: 'gpt-5.4-nano', label: 'GPT-5.4 nano' },
   ],
   gemini: [
-    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { id: 'gemini-3-flash', label: 'Gemini 3 Flash' },
-    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro' },
+    { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite' },
   ],
   claude: [
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
     { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+    { id: 'claude-opus-4-5', label: 'Claude Opus 4.5' },
     { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
   ],
 };
@@ -45,7 +46,7 @@ function App() {
   const [showSaveLoadModal, setShowSaveLoadModal] = useState<boolean>(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
   const [aiModel, setAiModel] = useState<string>('gpt');
-  const [aiModelId, setAiModelId] = useState<string>('gpt-4o');
+  const [aiModelId, setAiModelId] = useState<string>('gpt-5.4');
   const [showPromptsModal, setShowPromptsModal] = useState<boolean>(false);
   const [promptsPreview, setPromptsPreview] = useState<{ systemPrompt: string; userPromptText: string } | null>(null);
   const [promptsPreviewError, setPromptsPreviewError] = useState<string | null>(null);
@@ -380,6 +381,7 @@ function App() {
           >
             프롬프트 미리보기
           </button>
+          <div style={{ flex: 1 }} />
           <select
             className="ai-model-select"
             value={aiModel}
@@ -394,7 +396,7 @@ function App() {
             <option value="claude">Claude (Anthropic)</option>
           </select>
           <select
-            className="ai-model-select"
+            className="ai-model-select ai-model-select-detail"
             value={aiModelId}
             onChange={(e) => setAiModelId(e.target.value)}
           >
