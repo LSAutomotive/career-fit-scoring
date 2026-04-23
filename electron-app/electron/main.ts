@@ -1544,6 +1544,115 @@ ipcMain.handle('cert-gate-complete', () => {
   createWindow();
 });
 
+// ---------- 멀티모델 API 키 관리 ----------
+
+function getApiKeysPath(): string {
+  return path.join(app.getPath('userData'), 'api-keys.json');
+}
+
+function loadApiKeys(): Record<string, { key: string; verified: boolean }> {
+  try {
+    const p = getApiKeysPath();
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {}
+  return {};
+}
+
+function saveApiKeys(keys: Record<string, { key: string; verified: boolean }>): void {
+  fs.writeFileSync(getApiKeysPath(), JSON.stringify(keys, null, 2), 'utf-8');
+}
+
+ipcMain.handle('get-api-keys', async () => {
+  const keys = loadApiKeys();
+  const result: Record<string, { masked: string; verified: boolean }> = {};
+  for (const [model, data] of Object.entries(keys)) {
+    if (data.key) {
+      const k = data.key;
+      result[model] = {
+        masked: k.length > 8 ? k.slice(0, 4) + '****' + k.slice(-4) : '****',
+        verified: data.verified,
+      };
+    }
+  }
+  return result;
+});
+
+ipcMain.handle('save-api-key', async (_event, model: string, apiKey: string) => {
+  const keys = loadApiKeys();
+  keys[model] = { key: apiKey, verified: false };
+  saveApiKeys(keys);
+  return { success: true };
+});
+
+ipcMain.handle('clear-api-key', async (_event, model: string) => {
+  const keys = loadApiKeys();
+  delete keys[model];
+  saveApiKeys(keys);
+  return { success: true };
+});
+
+ipcMain.handle('verify-api-key', async (_event, model: string, apiKey: string) => {
+  try {
+    let success = false;
+    let message = '';
+
+    if (model === 'gpt') {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Hi' }], max_tokens: 5 }),
+      });
+      if (res.ok) { success = true; message = 'GPT API 키 검증 성공'; }
+      else {
+        const errText = await res.text();
+        message = `GPT API 오류 (${res.status}): ${errText.slice(0, 200)}`;
+      }
+    } else if (model === 'gemini') {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'Hi' }] }] }),
+      });
+      if (res.ok) { success = true; message = 'Gemini API 키 검증 성공'; }
+      else {
+        const errText = await res.text();
+        message = `Gemini API 오류 (${res.status}): ${errText.slice(0, 200)}`;
+      }
+    } else if (model === 'claude') {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({ model: 'claude-3-5-haiku-20241022', max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
+      });
+      if (res.ok) { success = true; message = 'Claude API 키 검증 성공'; }
+      else {
+        const errText = await res.text();
+        message = `Claude API 오류 (${res.status}): ${errText.slice(0, 200)}`;
+      }
+    } else {
+      return { success: false, message: `알 수 없는 모델: ${model}` };
+    }
+
+    if (success) {
+      const keys = loadApiKeys();
+      keys[model] = { key: apiKey, verified: true };
+      saveApiKeys(keys);
+    }
+    return { success, message };
+  } catch (error: any) {
+    return { success: false, message: `검증 실패: ${error.message || error}` };
+  }
+});
+
+function getModelApiKey(model: string): string | null {
+  const keys = loadApiKeys();
+  return keys[model]?.verified ? keys[model].key : null;
+}
+
 /** 파싱+AI 분석 소요 시간을 이력서 폴더의 elapsed_time.txt에 한 줄 추가 (빌드 여부 무관 기록) */
 ipcMain.handle('append-elapsed-time', async (_event, payload: { folderPath: string; count: number; totalSeconds: number }) => {
   try {
@@ -3140,12 +3249,93 @@ function calculateAge(birthDate: string): number | undefined {
   }
 }
 
+// 공통 AI API 호출 함수: provider(gpt/gemini/claude)와 modelId(세부 모델명)로 분기
+async function callProviderApi(
+  provider: string,
+  modelId: string,
+  systemPrompt: string,
+  userPromptText: string,
+  maxTokens: number
+): Promise<string> {
+  const apiKey = getModelApiKey(provider);
+  if (!apiKey) throw new Error(`${provider} API 키가 설정되지 않았거나 검증되지 않았습니다.`);
+
+  if (provider === 'gpt') {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPromptText }],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+        top_p: 1.0,
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      if (response.status === 429) {
+        let retryAfter = 10;
+        try { const ej = JSON.parse(errorData); const m = ej.error?.message?.match(/after (\d+) seconds?/i); if (m) retryAfter = parseInt(m[1], 10) + 2; } catch {}
+        throw new Error(`RATE_LIMIT:${retryAfter}`);
+      }
+      throw new Error(`OpenAI API 호출 실패 (${response.status}): ${errorData.slice(0, 300)}`);
+    }
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    return data.choices?.[0]?.message?.content || '';
+
+  } else if (provider === 'gemini') {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPromptText}` }] }],
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      if (response.status === 429) throw new Error(`RATE_LIMIT:10`);
+      throw new Error(`Gemini API 호출 실패 (${response.status}): ${errorData.slice(0, 300)}`);
+    }
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  } else if (provider === 'claude') {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: modelId,
+        system: systemPrompt,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: userPromptText }],
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      if (response.status === 429) throw new Error(`RATE_LIMIT:10`);
+      throw new Error(`Claude API 호출 실패 (${response.status}): ${errorData.slice(0, 300)}`);
+    }
+    const data = await response.json() as { content?: Array<{ text?: string }> };
+    return data.content?.[0]?.text || '';
+
+  } else {
+    throw new Error(`지원하지 않는 AI 모델: ${provider}`);
+  }
+}
+
 // AI API 호출 및 파싱 헬퍼 함수
 async function callAIAndParse(
   systemPrompt: string,
   userPromptText: string,
   fileName: string,
-  retryCount: number = 0
+  retryCount: number = 0,
+  aiModel?: string,
+  aiModelId?: string
 ): Promise<{
   success: boolean;
   grade: string;
@@ -3153,76 +3343,13 @@ async function callAIAndParse(
   reportParsed: boolean;
   error?: string;
 }> {
-  const MAX_RETRIES = 1; // 최대 1회 재시도
-  const API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
-  const API_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || 'https://roar-mjm4cwji-swedencentral.openai.azure.com/').replace(/\/+$/, '');
-  const DEPLOYMENT = (process.env.AZURE_OPENAI_DEPLOYMENT || '').replace(/^\uFEFF/, '').trim() || 'gpt-4o';
-  const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview';
-  if (retryCount === 0) {
-    console.log('[AI Check] Using deployment:', DEPLOYMENT, '(from cert)');
-  }
-  const apiUrl = `${API_ENDPOINT}/openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
+  const MAX_RETRIES = 1;
+  const provider = aiModel || 'gpt';
+  const modelId = aiModelId || 'gpt-4o';
 
   try {
-    console.log(`[AI Check] Calling Azure OpenAI API for: ${fileName}${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': API_KEY,
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt,
-          },
-          {
-            role: 'user',
-            content: userPromptText,
-          },
-        ],
-        max_tokens: 2000,
-        temperature: 0.7,
-        top_p: 1.0,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('[AI Check] API Error:', response.status, errorData);
-      
-      // 429 Rate Limit 에러 처리
-      if (response.status === 429) {
-        let retryAfter = 10;
-        try {
-          const errorJson = JSON.parse(errorData);
-          if (errorJson.error?.message) {
-            const retryMatch = errorJson.error.message.match(/after (\d+) seconds?/i);
-            if (retryMatch) {
-              retryAfter = parseInt(retryMatch[1], 10) + 2;
-            }
-          }
-        } catch (e) {
-          // JSON 파싱 실패 시 기본값 사용
-        }
-        
-        writeLog(`[AI Check] Rate limit reached, retrying after ${retryAfter} seconds...`, 'warn');
-        throw new Error(`RATE_LIMIT:${retryAfter}`);
-      }
-      
-      throw new Error(`AI API 호출 실패: ${response.status}`);
-    }
-
-    const responseData = await response.json() as {
-      choices?: Array<{
-        message?: {
-          content?: string;
-        };
-      }>;
-    };
-    const aiContent = responseData.choices?.[0]?.message?.content || '';
+    console.log(`[AI Check] Calling ${provider} API (${modelId}) for: ${fileName}${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
+    const aiContent = await callProviderApi(provider, modelId, systemPrompt, userPromptText, 2000);
 
     // JSON 파싱 시도
     let parsedReport: {
@@ -3439,7 +3566,7 @@ async function callAIAndParse(
       if (userPromptText.includes('자격증 만족여부')) {
         retryUserPromptText += '\n\n[재시도 강조] 자격증 평가 시 주의: 이력서의 자격사항 섹션을 정확히 확인하세요. 자격증이 명시되지 않았다면 절대 추측하지 말고 반드시 "X"로 평가하세요.';
       }
-      return callAIAndParse(retrySystemPrompt, retryUserPromptText, fileName, retryCount + 1);
+      return callAIAndParse(retrySystemPrompt, retryUserPromptText, fileName, retryCount + 1, aiModel, aiModelId);
     }
 
     console.log('[AI Check] Success for:', fileName, 'Grade:', grade);
@@ -3773,17 +3900,13 @@ async function callAIAndParseBatch(
   userPromptText: string,
   fileNames: string[],
   retryCount: number = 0,
-  debugDir: string | null = null
+  debugDir: string | null = null,
+  aiModel?: string,
+  aiModelId?: string
 ): Promise<Array<{ success: boolean; grade: string; report: any; reportParsed: boolean; fileName: string; error?: string }>> {
   const MAX_RETRIES = 1;
-  const API_KEY = process.env.AZURE_OPENAI_API_KEY || '';
-  const API_ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || 'https://roar-mjm4cwji-swedencentral.openai.azure.com/').replace(/\/+$/, '');
-  const DEPLOYMENT = (process.env.AZURE_OPENAI_DEPLOYMENT || '').replace(/^\uFEFF/, '').trim() || 'gpt-4o';
-  const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview';
-  const apiUrl = `${API_ENDPOINT}/openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
-  if (retryCount === 0) {
-    console.log('[AI Check Batch] Using deployment:', DEPLOYMENT, '(from cert)');
-  }
+  const provider = aiModel || 'gpt';
+  const modelId = aiModelId || 'gpt-4o';
 
   const emptyResult = (fileName: string, error: string) => ({
     success: false,
@@ -3795,45 +3918,8 @@ async function callAIAndParseBatch(
   });
 
   try {
-    console.log(`[AI Check Batch] Calling Azure OpenAI API for ${fileNames.length} files${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': API_KEY,
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPromptText },
-        ],
-        max_tokens: 16384,
-        temperature: 0.7,
-        top_p: 1.0,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('[AI Check Batch] API Error:', response.status, errorData);
-      if (response.status === 429) {
-        let retryAfter = 10;
-        try {
-          const errorJson = JSON.parse(errorData);
-          if (errorJson.error?.message) {
-            const retryMatch = errorJson.error.message.match(/after (\d+) seconds?/i);
-            if (retryMatch) retryAfter = parseInt(retryMatch[1], 10) + 2;
-          }
-        } catch (_e) {}
-        writeLog(`[AI Check Batch] Rate limit, retrying after ${retryAfter}s...`, 'warn');
-        throw new Error(`RATE_LIMIT:${retryAfter}`);
-      }
-      throw new Error(`AI API 호출 실패: ${response.status}`);
-    }
-
-    const responseData = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const aiContent = responseData.choices?.[0]?.message?.content || '';
+    console.log(`[AI Check Batch] Calling ${provider} API (${modelId}) for ${fileNames.length} files${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
+    const aiContent = await callProviderApi(provider, modelId, systemPrompt, userPromptText, 16384);
 
     // 디버그: AI 원문 응답 저장 및 로그
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
@@ -3924,7 +4010,7 @@ async function callAIAndParseBatch(
   }
 }
 
-// Azure OpenAI API 호출 IPC 핸들러
+// AI API 호출 IPC 핸들러
 ipcMain.handle('ai-check-resume', async (event, data: {
   applicationData: any;
   userPrompt: {
@@ -3945,22 +4031,16 @@ ipcMain.handle('ai-check-resume', async (event, data: {
     };
   };
   fileName: string;
+  aiModel?: string;
+  aiModelId?: string;
 }) => {
   try {
-    const API_KEY = process.env.AZURE_OPENAI_API_KEY;
-    
-    if (!API_KEY) {
-      throw new Error('Azure OpenAI API 키가 설정되지 않았습니다. 인증서 파일을 선택해 주세요.');
+    const selectedModel = data.aiModel || 'gpt';
+    const selectedModelId = data.aiModelId || 'gpt-4o';
+    const modelKey = getModelApiKey(selectedModel);
+    if (!modelKey) {
+      throw new Error(`${selectedModel} API 키가 설정되지 않았거나 검증되지 않았습니다. API 키 설정에서 키를 등록해 주세요.`);
     }
-    
-    const ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || 'https://roar-mjm4cwji-swedencentral.openai.azure.com/';
-    const DEPLOYMENT_NAME = (process.env.AZURE_OPENAI_DEPLOYMENT || '').replace(/^\uFEFF/, '').trim() || 'gpt-4o';
-    const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview';
-    
-    console.log('[AI Check] Using endpoint:', ENDPOINT);
-    console.log('[AI Check] Using deployment:', DEPLOYMENT_NAME);
-
-    const apiUrl = `${ENDPOINT}openai/deployments/${DEPLOYMENT_NAME}/chat/completions?api-version=${API_VERSION}`;
 
     // 이력서 데이터를 텍스트로 변환
     const resumeText = formatResumeDataForAI(data.applicationData);
@@ -3988,7 +4068,7 @@ ipcMain.handle('ai-check-resume', async (event, data: {
     const { systemPrompt, userPromptText } = buildAiPrompts(userPrompt, resumeText);
 
     // AI API 호출 및 파싱 (재시도 로직 포함)
-    const result = await callAIAndParse(systemPrompt, userPromptText, data.fileName, 0);
+    const result = await callAIAndParse(systemPrompt, userPromptText, data.fileName, 0, selectedModel, selectedModelId);
     
     if (!result.success) {
       throw new Error(result.error || 'AI 분석 실패');
@@ -4052,6 +4132,8 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
   items: Array<{ applicationData: any; fileName: string; filePath: string }>;
   debugFolder?: string;
   batchSize?: number;
+  aiModel?: string;
+  aiModelId?: string;
 }) => {
   const batchSize = Math.max(1, data.batchSize ?? AI_BATCH_FULL_DEFAULT_SIZE);
   const items = data.items || [];
@@ -4059,6 +4141,8 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
   const allResults: Array<{ success: boolean; grade: string; report: any; reportParsed: boolean; fileName: string; error?: string }> = [];
   let lastSystemPrompt = '';
   let lastUserPromptText = '';
+  const selectedModel = data.aiModel || 'gpt';
+  const selectedModelId = data.aiModelId || 'gpt-4o';
 
   const sendProgress = (batchIndex: number, results: typeof allResults, chunk: typeof items, systemPrompt: string, userPromptText: string, completedCount: number) => {
     try {
@@ -4079,9 +4163,9 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
   };
 
   try {
-    const API_KEY = process.env.AZURE_OPENAI_API_KEY;
-    if (!API_KEY) {
-      throw new Error('Azure OpenAI API 키가 설정되지 않았습니다. 인증서 파일을 선택해 주세요.');
+    const modelKey = getModelApiKey(selectedModel);
+    if (!modelKey) {
+      throw new Error(`${selectedModel} API 키가 설정되지 않았거나 검증되지 않았습니다. API 키 설정에서 키를 등록해 주세요.`);
     }
     if (!data.userPrompt?.jobDescription?.trim()) {
       throw new Error('jobDescription이 비어있습니다.');
@@ -4111,7 +4195,7 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
       let retryCount = 0;
       while (retryCount < AI_BATCH_FULL_MAX_RETRIES) {
         try {
-          batchResults = await callAIAndParseBatch(systemPrompt, userPromptText, fileNames, 0, debugDir);
+          batchResults = await callAIAndParseBatch(systemPrompt, userPromptText, fileNames, 0, debugDir, selectedModel, selectedModelId);
           break;
         } catch (err: any) {
           const msg = err?.message || 'AI 분석 실패';
@@ -4189,20 +4273,18 @@ ipcMain.handle('get-ai-prompts-preview', async (event, data: { userPrompt: any; 
 });
 
 /** 업무 내용을 바탕으로 경력 적합도 등급 기준(상·중·하 3단계) 생성. 각 등급당 공백 포함 약 200자 이내, 이력서만으로 판단 가능한 기준으로 생성 */
-ipcMain.handle('generate-grade-criteria', async (event, jobDescription: string) => {
+ipcMain.handle('generate-grade-criteria', async (event, jobDescription: string, aiModel?: string, aiModelId?: string) => {
   try {
-    const API_KEY = process.env.AZURE_OPENAI_API_KEY;
-    if (!API_KEY) {
-      throw new Error('Azure OpenAI API 키가 설정되지 않았습니다. 인증서 파일을 선택해 주세요.');
+    const provider = aiModel || 'gpt';
+    const modelId = aiModelId || 'gpt-4o';
+    const modelKey = getModelApiKey(provider);
+    if (!modelKey) {
+      throw new Error(`${provider} API 키가 설정되지 않았거나 검증되지 않았습니다. API 키 설정에서 키를 등록해 주세요.`);
     }
     const desc = (jobDescription && String(jobDescription).trim()) || '';
     if (!desc) {
       throw new Error('업무 내용이 비어있습니다. 업무 내용을 먼저 입력하세요.');
     }
-    const ENDPOINT = (process.env.AZURE_OPENAI_ENDPOINT || 'https://roar-mjm4cwji-swedencentral.openai.azure.com/').replace(/\/+$/, '');
-    const DEPLOYMENT = (process.env.AZURE_OPENAI_DEPLOYMENT || '').replace(/^\uFEFF/, '').trim() || 'gpt-4o';
-    const API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2024-12-01-preview';
-    const apiUrl = `${ENDPOINT}/openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
 
     const systemPrompt = `당신은 채용 담당자입니다. 주어진 "업무 내용"을 바탕으로, 이력서의 경력 적합도를 평가할 때 쓰일 **등급 기준**(상, 중, 하 3단계)을 생성해 주세요.
 
@@ -4217,32 +4299,13 @@ ipcMain.handle('generate-grade-criteria', async (event, jobDescription: string) 
 5. 등급별로 **조건 개수·키워드 수·포함 범위** 등을 단계적으로 조정해, 상(가장 많이/넓게 만족) → 하(전혀 만족하지 않음) 순으로 명확히 구분되게 하세요.
 6. **업무 내용에만 한정하지 마세요**: 상은 업무 내용과의 직접 연관을 강하게 두되, **중·하 등급**은 조금 더 기본적·인적 요소를 넣어도 좋습니다. 예: 관련 자격증 유무(이력서 자격사항에 [관련 자격명]이 1개 이상 있는가), 자기소개서 분량·충실함(자기소개서 문항이 N자 이상 채워져 있는가, 또는 문항 수 대비 비어 있지 않은가), 제조업·현장 경력 1건 이상 유무, 지원분야가 업무와 관련이 있는가 등. 이력서에서 확인 가능한 사실만 사용하세요.`;
 
-    const userPrompt = `다음 "업무 내용"을 바탕으로 경력 적합도 등급 기준(상, 중, 하 3단계)을 생성해 주세요. 위 규칙을 준수하고, **애매한 수식어 없이 fact·boolean 판단 가능한 명제**로만 작성한 뒤 JSON만 출력하세요.
+    const userPromptText = `다음 "업무 내용"을 바탕으로 경력 적합도 등급 기준(상, 중, 하 3단계)을 생성해 주세요. 위 규칙을 준수하고, **애매한 수식어 없이 fact·boolean 판단 가능한 명제**로만 작성한 뒤 JSON만 출력하세요.
 
 업무 내용:
 ${desc}`;
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'api-key': API_KEY },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 1500,
-        temperature: 0.5,
-      }),
-    });
+    const content = (await callProviderApi(provider, modelId, systemPrompt, userPromptText, 1500)).trim();
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('[generate-grade-criteria] API Error:', response.status, errText);
-      throw new Error(`API 호출 실패: ${response.status}`);
-    }
-
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    let content = (data.choices?.[0]?.message?.content || '').trim();
     let jsonText = content;
     if (content.startsWith('```')) {
       const lines = content.split('\n');

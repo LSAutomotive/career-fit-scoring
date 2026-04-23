@@ -94,6 +94,23 @@
   background-color: #f3f4f6;
 }
 
+.ai-model-select {
+  padding: 6px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  min-width: 140px;
+  height: 100%;
+}
+
+.ai-model-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
 .execute-btn {
   flex: 1;
   padding: 0.875rem 1.5rem;

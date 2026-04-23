@@ -3,10 +3,35 @@ import JobConfigForm from './components/JobConfigForm';
 import ResumeFileList from './components/ResumeFileList';
 import ResultView from './components/ResultView';
 import SaveLoadModal from './components/SaveLoadModal';
+import ApiKeySettingsModal from './components/ApiKeySettingsModal';
 import LoadingSpinner from './components/LoadingSpinner';
 import './styles/app.css';
+import './styles/api-key-settings.css';
 
 type ViewMode = 'config' | 'result';
+
+const AI_MODEL_OPTIONS: Record<string, Array<{ id: string; label: string }>> = {
+  gpt: [
+    { id: 'gpt-4o', label: 'GPT-4o' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+    { id: 'gpt-5.4-nano', label: 'GPT-5.4 nano' },
+  ],
+  gemini: [
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-3-flash', label: 'Gemini 3 Flash' },
+    { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+  ],
+  claude: [
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+  ],
+};
 
 function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('config');
@@ -18,6 +43,9 @@ function App() {
   const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; path: string }>>([]);
   const [jobMetadata, setJobMetadata] = useState<{ documentType?: 'docx' | 'pdf' } | null>(null);
   const [showSaveLoadModal, setShowSaveLoadModal] = useState<boolean>(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
+  const [aiModel, setAiModel] = useState<string>('gpt');
+  const [aiModelId, setAiModelId] = useState<string>('gpt-4o');
   const [showPromptsModal, setShowPromptsModal] = useState<boolean>(false);
   const [promptsPreview, setPromptsPreview] = useState<{ systemPrompt: string; userPromptText: string } | null>(null);
   const [promptsPreviewError, setPromptsPreviewError] = useState<string | null>(null);
@@ -218,6 +246,8 @@ function App() {
             onProcessingChange={setIsProcessing}
             onProgressChange={setAiProgress}
             jobMetadata={jobMetadata}
+            aiModel={aiModel}
+            aiModelId={aiModelId}
           />
         </div>
         {isProcessing && <LoadingSpinner message="이력서 분석 중..." fullScreen progress={aiProgress || undefined} />}
@@ -261,6 +291,8 @@ function App() {
               selectedFolder={selectedFolder}
               onFolderChange={setSelectedFolder}
               documentType={jobMetadata?.documentType ?? 'docx'}
+              aiModel={aiModel}
+              aiModelId={aiModelId}
               onJobMetadataChange={(meta) => {
                 const prevDocumentType = jobMetadata?.documentType;
                 setJobMetadata(prev => ({ ...prev, ...meta }));
@@ -285,6 +317,12 @@ function App() {
       </div>
       <div className="app-footer">
         <div className="app-footer-content">
+          <button 
+            className="save-load-btn"
+            onClick={() => setShowApiKeyModal(true)}
+          >
+            API 키 설정
+          </button>
           <button 
             className="save-load-btn"
             onClick={() => setShowSaveLoadModal(true)}
@@ -342,6 +380,28 @@ function App() {
           >
             프롬프트 미리보기
           </button>
+          <select
+            className="ai-model-select"
+            value={aiModel}
+            onChange={(e) => {
+              const provider = e.target.value;
+              setAiModel(provider);
+              setAiModelId(AI_MODEL_OPTIONS[provider]?.[0]?.id || '');
+            }}
+          >
+            <option value="gpt">GPT (OpenAI)</option>
+            <option value="gemini">Gemini (Google)</option>
+            <option value="claude">Claude (Anthropic)</option>
+          </select>
+          <select
+            className="ai-model-select"
+            value={aiModelId}
+            onChange={(e) => setAiModelId(e.target.value)}
+          >
+            {(AI_MODEL_OPTIONS[aiModel] || []).map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
           <button 
             className="execute-btn"
             onClick={handleExecute}
@@ -381,6 +441,9 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {showApiKeyModal && (
+        <ApiKeySettingsModal onClose={() => setShowApiKeyModal(false)} />
       )}
       {showSaveLoadModal && (
         <SaveLoadModal

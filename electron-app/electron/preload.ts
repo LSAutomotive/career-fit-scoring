@@ -10,9 +10,9 @@ contextBridge.exposeInMainWorld('electron', {
   parseAdditionalNationalCertificates: (content: string) => ipcRenderer.invoke('parse-additional-national-certificates', content),
   getAdditionalNationalCertificates: () => ipcRenderer.invoke('get-additional-national-certificates'),
   getDocxFiles: (folderPath: string, documentType?: 'docx' | 'pdf') => ipcRenderer.invoke('get-docx-files', folderPath, documentType),
-  aiCheckResume: (data: { applicationData: any; userPrompt: any; fileName: string }) =>
+  aiCheckResume: (data: { applicationData: any; userPrompt: any; fileName: string; aiModel?: string; aiModelId?: string }) =>
     ipcRenderer.invoke('ai-check-resume', data),
-  aiCheckResumeBatchFull: (data: { userPrompt: any; items: Array<{ applicationData: any; fileName: string; filePath: string }>; debugFolder?: string; batchSize?: number }) =>
+  aiCheckResumeBatchFull: (data: { userPrompt: any; items: Array<{ applicationData: any; fileName: string; filePath: string }>; debugFolder?: string; batchSize?: number; aiModel?: string; aiModelId?: string }) =>
     ipcRenderer.invoke('ai-check-resume-batch-full', data),
   onAiBatchProgress: (callback: (data: { batchIndex: number; totalBatches: number; results: any[]; chunk: Array<{ filePath: string; fileName: string }>; systemPrompt: string; userPromptText: string; completedCount: number }) => void) => {
     const handler = (_: unknown, data: any) => callback(data);
@@ -21,8 +21,8 @@ contextBridge.exposeInMainWorld('electron', {
   },
   getAiPromptsPreview: (data: { userPrompt: any; applicationData?: any }) =>
     ipcRenderer.invoke('get-ai-prompts-preview', data),
-  generateGradeCriteria: (jobDescription: string) =>
-    ipcRenderer.invoke('generate-grade-criteria', jobDescription),
+  generateGradeCriteria: (jobDescription: string, aiModel?: string, aiModelId?: string) =>
+    ipcRenderer.invoke('generate-grade-criteria', jobDescription, aiModel, aiModelId),
   processResume: (filePath: string, documentType?: 'docx' | 'pdf') =>
     ipcRenderer.invoke('process-resume', filePath, documentType),
   loadCache: (folderPath: string, filePaths: string[]) =>
@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('append-elapsed-time', payload),
   careernetSearchJobs: () => ipcRenderer.invoke('careernet-search-jobs'),
   careernetGetJobDetail: (jobdicSeq: string) => ipcRenderer.invoke('careernet-get-job-detail', jobdicSeq),
+  getApiKeys: () => ipcRenderer.invoke('get-api-keys'),
+  saveApiKey: (model: string, apiKey: string) => ipcRenderer.invoke('save-api-key', model, apiKey),
+  clearApiKey: (model: string) => ipcRenderer.invoke('clear-api-key', model),
+  verifyApiKey: (model: string, apiKey: string) => ipcRenderer.invoke('verify-api-key', model, apiKey),
   // 자동 업데이트 관련
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   onUpdateChecking: (callback: () => void) => {

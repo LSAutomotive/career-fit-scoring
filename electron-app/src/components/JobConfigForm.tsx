@@ -13,7 +13,7 @@ declare global {
       readImageAsBase64: (imagePath: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
       parseAdditionalNationalCertificates: (content: string) => Promise<string[]>;
       getAdditionalNationalCertificates: () => Promise<string>;
-      generateGradeCriteria: (jobDescription: string) => Promise<{ success: boolean; gradeCriteria?: { 상: string; 중: string; 하: string }; error?: string }>;
+      generateGradeCriteria: (jobDescription: string, aiModel?: string, aiModelId?: string) => Promise<{ success: boolean; gradeCriteria?: { 상: string; 중: string; 하: string }; error?: string }>;
     };
   }
 }
@@ -55,6 +55,8 @@ interface JobConfigFormProps {
       preferred: number;
       certifications: number;
     };
+    aiModel: string;
+    aiModelId: string;
   }) => void;
   onExecute?: () => void;
   loadedData?: any;
@@ -62,6 +64,8 @@ interface JobConfigFormProps {
   documentType?: 'docx' | 'pdf';
   onDocumentTypeChange?: (type: 'docx' | 'pdf') => void;
   onJobMetadataChange?: (meta: { documentType?: 'docx' | 'pdf' }) => void;
+  aiModel?: string;
+  aiModelId?: string;
 }
 
 export default function JobConfigForm({ 
@@ -75,6 +79,8 @@ export default function JobConfigForm({
   documentType: propDocumentType,
   onDocumentTypeChange,
   onJobMetadataChange,
+  aiModel = 'gpt',
+  aiModelId = 'gpt-4o',
 }: JobConfigFormProps) {
   const [documentType, setDocumentType] = useState<'docx' | 'pdf'>(propDocumentType || 'docx');
   const [selectedFolder, setSelectedFolder] = useState<string>(propSelectedFolder || '');
@@ -510,9 +516,11 @@ export default function JobConfigForm({
         requiredCertifications,
         gradeCriteria,
         scoringWeights,
+        aiModel,
+        aiModelId,
       });
     }
-  }, [jobDescription, requiredQualifications, preferredQualifications, requiredCertifications, gradeCriteria, scoringWeights, onUserPromptChange]);
+  }, [jobDescription, requiredQualifications, preferredQualifications, requiredCertifications, gradeCriteria, scoringWeights, aiModel, aiModelId, onUserPromptChange]);
 
   // 필수 입력 검증 및 실행
   const handleExecuteClick = () => {
@@ -594,6 +602,8 @@ export default function JobConfigForm({
         requiredCertifications,
         gradeCriteria,
         scoringWeights,
+        aiModel,
+        aiModelId,
       });
     }
 
@@ -606,14 +616,13 @@ export default function JobConfigForm({
   // onExecute prop이 변경되면 실행 버튼 핸들러 업데이트
   useEffect(() => {
     if (onExecute) {
-      // App 컴포넌트의 실행 버튼 클릭 시 이 함수 호출
       (window as any).__handleJobConfigExecute = handleExecuteClick;
     }
     return () => {
       delete (window as any).__handleJobConfigExecute;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFolder, jobDescription, requiredQualifications, preferredQualifications, requiredCertifications, gradeCriteria, scoringWeights, validationErrors, onExecute]);
+  }, [selectedFolder, jobDescription, requiredQualifications, preferredQualifications, requiredCertifications, gradeCriteria, scoringWeights, aiModel, aiModelId, validationErrors, onExecute]);
 
   return (
     <div className="job-config-form">
@@ -719,7 +728,7 @@ export default function JobConfigForm({
                       setGradeCriteriaGenerating(true);
                       setGradeCriteriaError(null);
                       try {
-                        const res = await window.electron?.generateGradeCriteria(jobDescription);
+                        const res = await window.electron?.generateGradeCriteria(jobDescription, aiModel, aiModelId);
                         if (res?.success && res.gradeCriteria) {
                           setGradeCriteria(res.gradeCriteria);
                           if (setValidationErrors && validationErrors.gradeCriteria) {

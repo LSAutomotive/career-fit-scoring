@@ -219,6 +219,8 @@ interface ResultViewProps {
   onProcessingChange?: (processing: boolean) => void;
   onProgressChange?: (progress: { current: number; total: number; currentFile: string; estimatedTimeRemainingMs?: number; phase?: 'parsing' | 'ai'; concurrency?: number }) => void;
   jobMetadata?: any; // App.tsx에서 전달하는 jobMetadata
+  aiModel?: string;
+  aiModelId?: string;
 }
 
 type SortField = 'name' | 'age' | 'lastCompany' | 'residence' | 'totalScore' | 'aiGrade' | 'status' | 'careerFit' | 'requiredQual' | 'preferredQual' | 'certification';
@@ -275,7 +277,7 @@ function getLatestCareer(app: any): { company: string; department: string; salar
   return { company: entries[0].company, department: entries[0].department, salary: entries[0].salary };
 }
 
-export default function ResultView({ selectedFiles, userPrompt, selectedFolder, onBack, onProcessingChange, onProgressChange, jobMetadata }: ResultViewProps) {
+export default function ResultView({ selectedFiles, userPrompt, selectedFolder, onBack, onProcessingChange, onProgressChange, jobMetadata, aiModel, aiModelId }: ResultViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortField, setSortField] = useState<SortField>('totalScore');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -1249,6 +1251,8 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
             items: needsAnalysisForBatch.map(r => ({ applicationData: r.applicationData, fileName: r.fileName, filePath: r.filePath })),
             debugFolder: selectedFolder || undefined,
             batchSize: BATCH_SIZE,
+            aiModel: aiModel || 'gpt',
+            aiModelId: aiModelId || 'gpt-4o',
           });
         } finally {
           if (typeof unsubProgress === 'function') unsubProgress();
