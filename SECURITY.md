@@ -1,30 +1,23 @@
 # 보안 관련 안내
 
-## 1. 빌드에서 제외되는 파일
+## 1. API 키 저장
 
-- **`.enc` 인증서 파일**: `electron-builder` 설정으로 **app.asar 및 app.asar.unpacked**에 `.enc` 파일이 포함되지 않습니다.  
-  (`electron-builder.yml` / `electron-builder-patch.yml`의 `files`에서 `!**/*.enc`로 제외)
+- **이력서 AI 평가**용 OpenAI / Gemini / Claude 키는 앱 **API 키 설정** UI에서 등록합니다.
+- 키는 **Electron 메인 프로세스**에서만 사용하며, React(렌더러) 번들에는 주입하지 않습니다.
+- 사용자 PC의 앱 데이터 폴더에 저장될 수 있으므로, 공용 PC에서는 사용 후 키 삭제를 권장합니다.
 
-## 2. Electron app.asar와 복호화 키 노출
+## 2. 자격증 목록
 
-Electron 앱에서는 **메인 프로세스 코드가 exe가 아니라 `app.asar`** 안에 들어갑니다.  
-`app.asar`는 일반적인 압축 포맷이라, 풀면 **JavaScript 소스가 평문**으로 보입니다.
+- 자격증 검색은 **정적 JSON**(`data/certification-names.json`)만 사용합니다. Q-Net/CareerNet API 키는 앱 실행에 필요하지 않습니다.
+- 목록 재생성(`npm run generate-cert-names`)은 개발자 로컬에서만 `.env`의 `QNET_API_KEY`를 사용할 수 있습니다.
 
-그래서 다음이 그대로 노출됩니다.
+## 3. Electron app.asar
 
-- 인증서 서명 검증용 상수 (`CERT_SIGNATURE_EXPECTED`)
-- 인증서 복호화에 쓰는 키 문자열 (`CERT_ENCRYPT_KEY_STRING`)
-- 그 키로 AES-256-CBC 복호화하는 로직
+Electron 앱의 메인 프로세스 코드는 `app.asar` 안에 포함됩니다. asar를 풀면 JavaScript 소스가 노출될 수 있습니다.
 
-즉, **클라이언트(앱)에 키를 두는 한 완전히 숨기는 것은 불가능**하고,  
-누군가 사용자 PC의 `.enc` 파일을 구하고 app.asar를 풀어 동일한 로직을 쓰면 API 키 등을 복원할 수 있습니다.
+- **클라이언트에 두는 비밀은 완전히 숨길 수 없습니다.** API 키는 사용자가 등록한 값이므로, PC 접근 권한이 있는 경우 키 파일을 읽을 수 있습니다.
+- 배포 시 `.env`, `.enc` 등 민감 파일은 `electron-builder` 설정으로 asar/unpacked에 포함되지 않도록 제외합니다(`!**/*.enc` 등).
 
-## 3. 권장 대응 (해킹 난이도 상향)
+## 4. 이력서 데이터
 
-| 방안 | 설명 |
-|------|------|
-| **V8 Bytecode (Bytenode)** | `main.js`를 사람이 읽기 어려운 V8 바이트코드로 컴파일해 빌드에 포함. bytenode 라이브러리 활용. |
-| **C++ Native Addon (Node-API)** | 복호화 로직과 시크릿 키만 C++로 작성해 `.node`(DLL)로 빌드 후 Electron에서 로드. 리버스 없이는 키 추출이 상대적으로 어렵습니다. |
-| **JavaScript 난독화** | `javascript-obfuscator` 등을 빌드 파이프라인에 넣어 변수명·문자열을 꼬아 두기. 완전한 보호는 아니지만 스크립트 읽기 난이도는 올라갑니다. |
-
-위 조합(예: 핵심만 C++ addon + 나머지 Bytenode/난독화)을 적용하면, “exe 바이너리에만 키가 있다”가 아니라 “app.asar 안 평문 JS에 키가 있다”는 한계를 완화할 수 있습니다.
+- 이력서 파일·파싱 캐시·AI 분석 결과는 **로컬 폴더**에서 처리됩니다. 서버로 자동 업로드하지 않습니다(AI API 호출 시 해당 제공자로만 전송).

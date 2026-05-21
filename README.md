@@ -13,8 +13,7 @@
 - **병렬 처리**: 파싱 최대 4개 동시, AI 분석 최대 3개 동시
 - **진행률·ETA**: 파싱/AI 단계별 진행률 및 예상 남은 시간 표시
 - **채용 설정 UI**: 직종·필수/우대·자격증·등급별 조건·점수 가중치 설정, 저장/불러오기
-- **직종·자격 목록**: 채용 설정 시 직종/자격증 목록을 커리어넷·Q-Net API로 조회 (메인 프로세스에서 호출, 비상 시 로컬 백업 사용)
-- **오프라인 자격증 검색**: Q-Net·공인민간·추가 국가자격을 병합한 정적 목록(`data/certification-names.json`) 사용 — API 키·`.env` 불필요
+- **오프라인 자격증 검색**: Q-Net·공인민간·추가 국가자격을 병합한 정적 목록(`data/certification-names.json`) — API 키·`.env` 불필요
 - **결과·엑셀**: 테이블 정렬/필터, 상세 패널(증명사진, AI 코멘트), 선택 후보 **엑셀(.xlsx)보내기** (기본 정보 + AI등급·종합점수·경력/필수/우대/자격 만족도 등)
 - **자동 업데이트**: electron-updater 지원
 - **프롬프트 미리보기**: 설정·결과 화면에서 AI에 전달되는 System/User 프롬프트 확인
@@ -27,8 +26,8 @@
 - **이력서 파싱**: DOCX 테이블 추출, PDF는 외부 스크립트(pdftotext 등) 연동
 - **데이터 매핑**: 파싱 결과를 채용/AI 입력 형식으로 매핑
 - **자격증 파싱**: 공식·추가 국가자격증 목록 파싱
-- **알고리즘 점수** (라이브러리/참고용): 자격증 10점, 경력 20점, 학력 20점 기준의 점수 계산·총점 가중 평균 (앱 결과 화면에서는 미사용, AI 평가 사용)
-- **API 클라이언트**: 커리어넷(직종/학과/직종 상세), Q-Net(자격증 목록) — 앱은 메인 프로세스에서 직접 HTTP 호출하여 직종/자격 목록만 사용
+- **알고리즘 점수** (라이브러리/참고용): 자격증 10점, 경력 20점, 학력 20점 기준 (앱 결과 화면에서는 미사용, AI 평가 사용)
+- **API 클라이언트** (Core 라이브러리): 커리어넷·Q-Net — 앱 런타임에서는 자격증 목록만 정적 JSON 사용
 
 ### 2. Electron Application (`electron-app`)
 데스크톱 애플리케이션
@@ -131,8 +130,7 @@ PDF 파싱은 **pdftotext(poppler)만** 사용합니다(레거시 pdfminer.six·
 
 ### 1. 채용 공고 설정 (Job Config)
 
-- **직종 선택**: 커리어넷 API를 통한 직종 검색 및 선택
-- **업무 내용 입력**: 상세 업무 내용 및 요구사항 작성
+- **직종·업무 입력**: 업무 내용 및 요구사항 직접 입력
 - **필수/우대 사항 설정**: 필수 요구사항 및 우대 사항 입력
 - **필수 자격증 추가**: 자격증 검색 및 필수 자격증 설정
 - **등급별 조건 설정**: 상/중/하 3단계 등급별 판정 기준 입력
@@ -208,7 +206,7 @@ npm run generate-cert-names
 ### Core Module
 - TypeScript, Node.js
 - 이력서 파싱(DOCX), 데이터 매핑, 자격증 파싱
-- (선택) 알고리즘 점수, 커리어넷/Q-Net API 클라이언트
+- (선택) 알고리즘 점수, 커리어넷/Q-Net API 클라이언트 (앱 런타임 미사용)
 
 ### Electron Application
 - Electron 28
@@ -234,9 +232,10 @@ career-fit-scoring/
 │   │   ├── components/     # React 컴포넌트 (JobConfigForm, ResultView, LoadingSpinner 등)
 │   │   └── styles/        # CSS 스타일
 │   └── scripts/            # 빌드·Poppler 검증 스크립트
-├── scripts/                # 파싱용 Python·빌드 JS (parse_pdf_resume.py, setup-python-env.js 등)
-├── python-embed/           # 임베디드 Python (DOCX·PDF 파싱 시 우선 사용)
-└── docs/                   # 파싱 동작 참고 (PARSING_DOCX/PARSING_PDF 등)
+├── data/                   # certification-names.json (오프라인 자격증 목록)
+├── scripts/                # 파싱 Python·빌드 JS
+├── python-embed/           # 임베디드 Python (선택, DOCX 파싱)
+└── docs/                   # DOCX/PDF 파싱 참고
 ```
 
 ## 사용 예제
@@ -263,31 +262,12 @@ const scores = calculateAllScores(applicationData, { aiMetadata: jobMetadata });
 ## 개발 로드맵
 
 ### ✅ 완료된 기능
-- [x] 점수 계산 알고리즘 구현
-- [x] 커리어넷 API 연동
-- [x] Q-Net API 연동
-- [x] DOCX 파일 파싱
-- [x] PDF 이력서 파싱 (pdftotext, 임베디드 Python 우선)
-- [x] PDF 증명사진 추출(100×140) 및 UI·캐시 표시
-- [x] PDF 학력 GPA 추출 및 표시
-- [x] 이력서 데이터 매핑
-- [x] Electron 앱 기본 구조
-- [x] 채용 공고 설정 UI (등급별 조건, 저장/불러오기)
-- [x] 이력서 분석 및 결과 표시 (병렬 파싱·AI 분석)
-- [x] 진행 모달 phase·동시 처리 수 표시
-- [x] AI 기반 평가 (등급, 등급별 판정·근거, 요약, 강점/약점, 의견)
-- [x] AI 프롬프트 미리보기 (설정 화면·결과 화면)
-- [x] 자동 업데이트 기능
-- [x] 스플래시 스크린
-- [x] 상세 패널 UI 개선 (리스트 스타일, 기간 표시)
-- [x] Patcher 빌드에 poppler-windows 포함
-- [x] 엑셀보내기: 기본 정보 + 주소 + AI 평가·종합점수(가중치 계산, 필수 불만족 시 0)
+- [x] DOCX·PDF 이력서 파싱 및 AI 기반 평가
+- [x] 오프라인 자격증 목록, 채용 설정 UI, 엑셀 내보내기
+- [x] 자동 업데이트(Installer/Patcher), 디버그 모드
 
 ### 🔄 향후 개선 예정
-- [ ] 다양한 이력서 형식 지원 확대
-- [ ] AI 프롬프트 최적화
-- [ ] 성능 최적화
-- [ ] 다국어 지원
+- [ ] 이력서 형식 지원 확대, AI 프롬프트·성능 개선
 
 ## 라이선스
 
@@ -295,9 +275,8 @@ MIT License - 자유롭게 사용, 수정, 배포 가능합니다.
 
 ## 참고 문서
 
-- [EXAMPLES.md](./EXAMPLES.md) - 상세 사용 예제 및 데이터 구조
-- [CHANGELOG.md](./CHANGELOG.md) - 변경 이력
-- [RESUME_FORM_MAPPING_GUIDE.md](./RESUME_FORM_MAPPING_GUIDE.md) - 이력서 형식 매핑 가이드
-- [RESUME_MAPPING_UPDATE.md](./RESUME_MAPPING_UPDATE.md) - 이력서 매핑 업데이트
-- [electron-app/README.md](./electron-app/README.md) - Electron 앱 상세 문서
-- [docs/](./docs/) - DOCX/PDF 파싱 참고 문서
+- [CHANGELOG.md](./CHANGELOG.md) — 변경 이력
+- [SECURITY.md](./SECURITY.md) — API 키·로컬 데이터 처리
+- [RESUME_FORM_MAPPING_GUIDE.md](./RESUME_FORM_MAPPING_GUIDE.md) — DOCX 테이블 매핑
+- [electron-app/README.md](./electron-app/README.md) — 빌드·릴리스·트러블슈팅
+- [docs/](./docs/) — DOCX/PDF 파싱 상세
