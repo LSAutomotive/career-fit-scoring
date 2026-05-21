@@ -31,8 +31,8 @@ files:
   - electron/**/*
   - dist/**/*
   - package.json
-  # certificate_official.txt는 copy-scripts-for-build.js가 build-env/로 복사 (API 키는 인증서 .enc만 사용)
-  - "build-env/certificate_official.txt"
+  # certification-names.json은 copy-scripts-for-build.js가 build-env/로 복사
+  - "build-env/certification-names.json"
   # icon.ico와 favicon.ico는 extraResources로 루트에 복사 (files는 resources/app에 감)
   # 모든 node_modules 포함
   - "node_modules/**/*"
@@ -113,7 +113,7 @@ win:
   extraResources:
     - from: icon.ico
       to: .
-    # .env, certificate_official.txt → app.asar 안에 포함 (files). Node fs가 asar 안에서 읽을 수 있음.
+    # certification-names.json → app.asar 안에 포함 (files). Node fs가 asar 안에서 읽을 수 있음.
     # scripts/*.py → asarUnpack으로 app.asar.unpacked에 풀림 (python.exe가 직접 읽어야 하므로)
     # Python embeddable 포함 (프로젝트 루트의 python-embed 폴더) - 실행 파일이라 extraResources 필수
     - from: ../python-embed

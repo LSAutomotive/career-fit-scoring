@@ -1,46 +1,21 @@
-# 자격증 파일 설정 가이드
+# 자격증 목록 (정적 데이터)
 
-## 필요한 파일
+앱은 Q-Net/CareerNet API를 런타임에 호출하지 않습니다. 아래 JSON을 사용합니다.
 
-Electron 앱이 정상적으로 작동하려면 다음 파일이 필요합니다:
+## certification-names.json
 
-### 1. certificate_official.txt
+- **저장소 경로**: `career-fit-scoring/data/certification-names.json`
+- **빌드 시 복사**: `electron-app/scripts/copy-scripts-for-build.js` → `electron-app/build-env/certification-names.json` (asar 포함)
+- **내용**: Q-Net 국가자격 + `certificate_official.txt`(공인민간) + `src/certificateParser.ts`의 추가 국가자격
 
-공인민간자격증 목록이 포함된 탭으로 구분된 텍스트 파일입니다.
+## 목록 갱신 (개발자)
 
-**파일 위치:**
-다음 경로 중 하나에 파일을 배치하세요:
+```bash
+# 프로젝트 루트 — .env에 QNET_API_KEY 필요 (1회 fetch)
+npm run generate-cert-names
 
-1. `career-fit-scoring/certificate_official.txt` (프로젝트 루트)
-2. `ats-system/certificate_official.txt` (원본 프로젝트 루트)
-3. `electron-app/certificate_official.txt` (Electron 앱 디렉토리)
-
-**파일 형식:**
-- 탭(`\t`)으로 구분된 테이블 형식
-- 첫 번째 줄은 헤더
-- E열(인덱스 4): 자격명
-- F열(인덱스 5): 등급명
-
-**예시:**
-```
-헤더1	헤더2	헤더3	헤더4	자격명	등급명
-...	...	...	...	세무회계	1급,2급,3급
+# Q-Net fetch 없이 official/additional만 재병합
+node scripts/generate-certification-names.js --skip-fetch
 ```
 
-## 파일이 없는 경우
-
-파일이 없어도 앱은 작동하지만, 공인민간자격증 목록이 로드되지 않습니다.
-
-다음은 여전히 작동합니다:
-- Q-Net API를 통한 국가자격증 목록
-- 추가 국가자격증 목록 (하드코딩된 목록)
-
-## 파일 추가 방법
-
-1. 원본 프로젝트에서 `certificate_official.txt` 파일을 찾아서
-2. 위의 경로 중 하나에 복사하세요
-
-또는
-
-1. 새 파일을 생성하고
-2. 탭으로 구분된 형식으로 자격증 목록을 작성하세요
+`certificate_official.txt`는 Git에 포함하지 않을 수 있습니다. 로컬에 두면 generate 시 자동 병합됩니다.

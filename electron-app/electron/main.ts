@@ -2,7 +2,6 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
-import * as https from 'https';
 import * as net from 'net';
 // career-fit-scoring 패키지에서 함수 import
 // 빌드 시에는 컴파일된 파일을 사용하므로 career-fit-scoring 패키지로 import
@@ -72,7 +71,6 @@ let autoUpdater: any = null;
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
-let certGateWindow: BrowserWindow | null = null;
 let splashServer: http.Server | null = null;
 
 /**
@@ -589,107 +587,18 @@ async function setupAutoUpdater() {
   });
 }
 
-// ---------- 회사 인증서(cert) 기반 API 키 로드 ----------
-const CERT_SIGNATURE_EXPECTED = 'zuri';
-const CERT_ENCRYPT_KEY_STRING = 'encryptkey';
-
-/** 개발(dev)과 빌드된 앱이 서로 다른 설정 파일 사용 → 빌드 앱 실행 시 저장된 인증서 없음, 인증서 창 표시 */
-function getCertConfigPath(): string {
-  const fileName = app.isPackaged ? 'cert-config.json' : 'cert-config-dev.json';
-  return path.join(app.getPath('userData'), fileName);
-}
-
-function deriveCertKey(keyString: string): Buffer {
-  const crypto = require('crypto');
-  return crypto.createHash('sha256').update(keyString, 'utf8').digest();
-}
-
-/** 암호화된 cert 버퍼를 복호화하고 signature + key=value 파싱. 서명 불일치 시 null */
-function decryptAndParseCert(encryptedBuffer: Buffer): { signature: string; env: Record<string, string> } | null {
-  try {
-    const crypto = require('crypto');
-    const key = deriveCertKey(CERT_ENCRYPT_KEY_STRING);
-    const ivLength = 16;
-    if (encryptedBuffer.length < ivLength) return null;
-    const iv = encryptedBuffer.subarray(0, ivLength);
-    const ciphertext = encryptedBuffer.subarray(ivLength);
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-    const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
-    const env: Record<string, string> = {};
-    let signature = '';
-    for (const part of plain.split(';')) {
-      const eq = part.indexOf('=');
-      if (eq <= 0) continue;
-      const k = part.slice(0, eq).trim();
-      const v = part.slice(eq + 1).trim();
-      if (k === 'signature') signature = v;
-      else env[k] = v;
-    }
-    return { signature, env };
-  } catch {
-    return null;
-  }
-}
-
-/** cert 파일 경로에서 읽어 서명 검증 후 process.env에 적용. 성공 시 true */
-function loadCertFromPath(certPath: string): boolean {
-  try {
-    if (!fs.existsSync(certPath)) return false;
-    const buf = fs.readFileSync(certPath);
-    const parsed = decryptAndParseCert(buf);
-    if (!parsed || parsed.signature !== CERT_SIGNATURE_EXPECTED) return false;
-    for (const [k, v] of Object.entries(parsed.env)) {
-      if (v) process.env[k] = v;
-    }
-    process.env.CREDENTIALS_FROM_CERT = '1';
-    console.log('[Cert] Loaded and applied from:', certPath);
-    writeLog('[Cert] Loaded from ' + certPath, 'info');
-    return true;
-  } catch (e) {
-    console.warn('[Cert] Load failed:', e);
-    return false;
-  }
-}
-
-/** 저장된 cert 경로 읽기 */
-function getSavedCertPath(): string | null {
-  try {
-    const configPath = getCertConfigPath();
-    if (!fs.existsSync(configPath)) return null;
-    const data = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    return typeof data?.certPath === 'string' ? data.certPath : null;
-  } catch {
-    return null;
-  }
-}
-
-/** cert 경로 저장 */
-function saveCertPath(certPath: string): void {
-  try {
-    const configPath = getCertConfigPath();
-    fs.writeFileSync(configPath, JSON.stringify({ certPath }, null, 2), 'utf-8');
-  } catch (e) {
-    console.warn('[Cert] Save config failed:', e);
-  }
-}
-
-/** 인증서로 API 키 확보. 저장된 cert만 시도. 성공 시 true, 없거나 실패 시 false(인증서 지정 창 필요) */
-function ensureCredentials(): boolean {
-  const saved = getSavedCertPath();
-  if (saved && loadCertFromPath(saved)) return true;
-  return false;
-}
-
 /**
- * 프로젝트 루트 디렉토리 찾기
- * certificate_official.txt 파일이 있는 디렉토리를 찾습니다.
+ * 프로젝트 루트 디렉토리 찾기 (data/certification-names.json 또는 package.json 기준)
  */
 function findProjectRoot(): string | null {
-  // asar 안 build-env/를 먼저 확인 (빌드 시 복사된 파일)
+  const hasProjectMarker = (dir: string): boolean =>
+    fs.existsSync(path.join(dir, 'data', 'certification-names.json')) ||
+    fs.existsSync(path.join(dir, 'package.json'));
+
   try {
     const appPath = app?.getAppPath ? app.getAppPath() : null;
     if (appPath) {
-      const buildEnvCert = path.join(appPath, 'build-env', 'certificate_official.txt');
+      const buildEnvCert = path.join(appPath, 'build-env', 'certification-names.json');
       if (fs.existsSync(buildEnvCert)) {
         const buildEnvDir = path.join(appPath, 'build-env');
         console.log('[Find Project Root] Found at (build-env):', buildEnvDir);
@@ -699,41 +608,87 @@ function findProjectRoot(): string | null {
   } catch {}
 
   let currentDir = __dirname;
-  const maxDepth = 10; // 최대 탐색 깊이
-  
+  const maxDepth = 10;
+
   for (let i = 0; i < maxDepth; i++) {
-    const certFile = path.join(currentDir, 'certificate_official.txt');
-    if (fs.existsSync(certFile)) {
+    if (hasProjectMarker(currentDir)) {
       console.log('[Find Project Root] Found at:', currentDir);
       return currentDir;
     }
-    
     const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      // 루트 디렉토리에 도달
-      break;
-    }
+    if (parentDir === currentDir) break;
     currentDir = parentDir;
   }
-  
-  // process.cwd()에서도 시도
+
   currentDir = process.cwd();
   for (let i = 0; i < maxDepth; i++) {
-    const certFile = path.join(currentDir, 'certificate_official.txt');
-    if (fs.existsSync(certFile)) {
+    if (hasProjectMarker(currentDir)) {
       console.log('[Find Project Root] Found at (cwd):', currentDir);
       return currentDir;
     }
-    
     const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      break;
-    }
+    if (parentDir === currentDir) break;
     currentDir = parentDir;
   }
-  
+
   console.warn('[Find Project Root] Project root not found');
   return null;
+}
+
+/** 정적 자격증 목록 JSON 경로 탐색 */
+function findCertificationNamesPath(): string | null {
+  const candidates: (string | null)[] = [];
+
+  try {
+    const appPath = app.getAppPath();
+    candidates.push(path.join(appPath, 'build-env', 'certification-names.json'));
+  } catch {}
+
+  const projectRoot = findProjectRoot();
+  if (projectRoot) {
+    const inData = path.join(projectRoot, 'data', 'certification-names.json');
+    const inBuildEnv = path.join(projectRoot, 'certification-names.json');
+    candidates.push(inData, inBuildEnv);
+  }
+
+  candidates.push(
+    path.join(__dirname, '../../..', 'data', 'certification-names.json'),
+    path.join(__dirname, '../..', 'data', 'certification-names.json'),
+    path.join(process.cwd(), 'data', 'certification-names.json'),
+    path.join(process.cwd(), '..', 'data', 'certification-names.json'),
+  );
+
+  for (const filePath of candidates) {
+    if (filePath && fs.existsSync(filePath)) {
+      return filePath;
+    }
+  }
+  return null;
+}
+
+let cachedCertificationNames: string[] | null = null;
+
+function loadCertificationNames(): string[] {
+  if (cachedCertificationNames) {
+    return cachedCertificationNames;
+  }
+
+  const filePath = findCertificationNamesPath();
+  if (!filePath) {
+    throw new Error('certification-names.json 파일을 찾을 수 없습니다.');
+  }
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const data = JSON.parse(raw);
+  const list = data.certifications;
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error('certification-names.json에 자격증 목록이 없습니다.');
+  }
+
+  cachedCertificationNames = list.map((name: string) => String(name).trim()).filter(Boolean);
+  console.log('[Certs] Loaded', cachedCertificationNames.length, 'names from', filePath);
+  writeLog(`[Certs] Loaded ${cachedCertificationNames.length} names from ${filePath}`, 'info');
+  return cachedCertificationNames;
 }
 
 function createSplashWindow() {
@@ -839,145 +794,6 @@ function createSplashWindow() {
   
   // 중앙에 배치
   splashWindow.center();
-}
-
-/** 인증서 지정 전용 작은 창(로그인 화면). 지정하기 → 검증 성공 시 시작하기 활성화 → 시작하기로 메인 창 오픈 */
-function createCertGateWindow() {
-  let iconPath: string | undefined;
-  if (app.isPackaged) {
-    const appPath = app.getAppPath();
-    if (appPath.includes('resources/app')) {
-      iconPath = path.join(path.dirname(path.dirname(appPath)), 'icon.ico');
-    } else {
-      iconPath = path.join(path.dirname(appPath), 'icon.ico');
-    }
-    if (!fs.existsSync(iconPath ?? '')) {
-      iconPath = path.join(process.resourcesPath || path.dirname(appPath), 'icon.ico');
-    }
-  } else {
-    iconPath = path.join(__dirname, '..', 'icon.ico');
-  }
-
-  certGateWindow = new BrowserWindow({
-    width: 420,
-    height: 320,
-    frame: true,
-    resizable: false,
-    icon: iconPath,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
-    },
-  });
-
-  const certGateHTML = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      width: 100%;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: 24px;
-      background: linear-gradient(160deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      color: #e8e8e8;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    }
-    h2 {
-      font-size: 18px;
-      font-weight: 600;
-      margin-bottom: 24px;
-      text-align: center;
-    }
-    .msg { font-size: 14px; margin-bottom: 20px; text-align: center; color: #b0b0b0; }
-    .success { color: #4ade80; font-weight: 500; }
-    .error { color: #f87171; font-size: 13px; margin-top: 8px; }
-    .btns { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 200px; }
-    button {
-      padding: 12px 20px;
-      font-size: 14px;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      background: #3b82f6;
-      color: white;
-      font-weight: 500;
-    }
-    button:hover:not(:disabled) { background: #2563eb; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #btnStart { background: #059669; }
-    #btnStart:hover:not(:disabled) { background: #047857; }
-    #status { min-height: 22px; margin-bottom: 8px; }
-  </style>
-</head>
-<body>
-  <h2>인증서 확인</h2>
-  <p class="msg">인증서 파일(.enc)을 선택해주세요.</p>
-  <div id="status"></div>
-  <div class="btns">
-    <button id="btnSelect">파일 선택</button>
-    <button id="btnStart" disabled>시작하기</button>
-  </div>
-  <script>
-    (function(){
-      var status = document.getElementById('status');
-      var btnSelect = document.getElementById('btnSelect');
-      var btnStart = document.getElementById('btnStart');
-      function setStatus(text, isError) {
-        status.innerHTML = text ? '<span class="' + (isError ? 'error' : 'success') + '">' + text + '</span>' : '';
-      }
-      if (typeof window.electron === 'undefined' || !window.electron.selectCertFile) {
-        setStatus('앱 환경을 불러오는 중…', false);
-        return;
-      }
-      btnSelect.addEventListener('click', function(){
-        setStatus('', false);
-        btnSelect.disabled = true;
-        window.electron.selectCertFile().then(function(r){
-          btnSelect.disabled = false;
-          if (r && r.success) {
-            setStatus('인증서가 확인되었습니다.', false);
-            btnStart.disabled = false;
-            btnSelect.disabled = true;
-          } else if (r && r.cancelled) {
-            setStatus('', false);
-          } else {
-            setStatus(r && r.error ? r.error : '인증서 확인에 실패했습니다.', true);
-          }
-        }).catch(function(){
-          btnSelect.disabled = false;
-          setStatus('요청 처리 중 오류가 발생했습니다.', true);
-        });
-      });
-      btnStart.addEventListener('click', function(){
-        if (typeof window.electron.certGateComplete === 'function') {
-          window.electron.certGateComplete();
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
-  `;
-
-  certGateWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(certGateHTML)}`);
-  certGateWindow.on('closed', () => { certGateWindow = null; });
-  certGateWindow.webContents.on('context-menu', (e) => e.preventDefault());
-  if (app.isPackaged) {
-    certGateWindow.webContents.on('devtools-opened', () => {
-      if (certGateWindow) certGateWindow.webContents.closeDevTools();
-    });
-  }
-  certGateWindow.show();
-  certGateWindow.center();
 }
 
 function createWindow() {
@@ -1314,19 +1130,7 @@ app.whenReady().then(async () => {
     // 약간의 지연을 두어 스플래시가 보이도록 함
     await new Promise(resolve => setTimeout(resolve, 500));
     
-    // API 키 확보: 저장된 cert만 시도. 없으면 인증서 지정 창 표시 후, 시작하기 시 메인 창 생성
-    // --show-cert-gate 이 있으면 저장된 cert 있어도 인증서 창부터 표시(테스트용)
-    const forceCertGate = process.argv.includes('--show-cert-gate');
-    const hasCert = forceCertGate ? false : ensureCredentials();
-    if (hasCert) {
-      createWindow();
-    } else {
-      if (splashWindow) {
-        splashWindow.close();
-        splashWindow = null;
-      }
-      createCertGateWindow();
-    }
+    createWindow();
   } catch (error: any) {
     const errorMsg = `[Init] Initialization error: ${error?.message || error}`;
     console.error(errorMsg);
@@ -1516,32 +1320,6 @@ ipcMain.handle('select-folder', async () => {
   }
   
   return result.filePaths[0];
-});
-
-/** 회사 인증서 파일 다시 선택. 성공 시 process.env 적용 및 경로 저장 */
-ipcMain.handle('select-cert-file', async (_event) => {
-  const win = mainWindow ?? certGateWindow ?? undefined;
-  const result = await dialog.showOpenDialog((win ?? undefined) as any, {
-    title: '회사 인증서 파일 선택',
-    defaultPath: app.getPath('documents'),
-    filters: [{ name: '인증서', extensions: ['enc'] }, { name: '모든 파일', extensions: ['*'] }],
-    properties: ['openFile'],
-  });
-  const filePaths = result.filePaths;
-  if (!filePaths || filePaths.length === 0) return { success: false, cancelled: true };
-  const certPath = filePaths[0];
-  if (!loadCertFromPath(certPath)) return { success: false, error: '서명이 일치하지 않거나 파일이 손상되었습니다.' };
-  saveCertPath(certPath);
-  return { success: true };
-});
-
-/** 인증서 지정 창에서 시작하기 클릭: cert 창 닫고 메인 창 생성 */
-ipcMain.handle('cert-gate-complete', () => {
-  if (certGateWindow) {
-    certGateWindow.close();
-    certGateWindow = null;
-  }
-  createWindow();
 });
 
 // ---------- 멀티모델 API 키 관리 ----------
@@ -1958,483 +1736,9 @@ ipcMain.handle('save-cache', async (event, folderPath: string, results: Array<{
   }
 });
 
-// Q-Net 비상용 로컬 데이터 파일 경로
-function getQNetBackupPath(): string {
-  const projectRoot = findProjectRoot();
-  if (projectRoot) {
-    return path.join(projectRoot, 'qnet_certifications_backup.json');
-  }
-  // 프로젝트 루트를 찾지 못한 경우
-  return path.join(__dirname, '../../qnet_certifications_backup.json');
-}
-
-// CareerNet 비상용 로컬 데이터 파일 경로
-function getCareerNetBackupPath(): string {
-  const projectRoot = findProjectRoot();
-  if (projectRoot) {
-    return path.join(projectRoot, 'careernet_jobs_backup.json');
-  }
-  return path.join(__dirname, '../../careernet_jobs_backup.json');
-}
-
-// Q-Net 비상용 로컬 데이터 저장
-function saveQNetBackup(certifications: string[]): void {
-  try {
-    const backupPath = getQNetBackupPath();
-    const backupData = {
-      lastUpdated: new Date().toISOString(),
-      count: certifications.length,
-      certifications: certifications,
-    };
-    fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf-8');
-    console.log('[Q-Net Backup] Saved', certifications.length, 'certifications to:', backupPath);
-  } catch (error) {
-    console.error('[Q-Net Backup] Error saving backup:', error);
-  }
-}
-
-// CareerNet 비상용 로컬 데이터 저장
-function saveCareerNetBackup(jobs: any[]): void {
-  try {
-    const backupPath = getCareerNetBackupPath();
-    const backupData = {
-      lastUpdated: new Date().toISOString(),
-      count: jobs.length,
-      jobs: jobs,
-    };
-    fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf-8');
-    console.log('[CareerNet Backup] Saved', jobs.length, 'jobs to:', backupPath);
-  } catch (error) {
-    console.error('[CareerNet Backup] Error saving backup:', error);
-  }
-}
-
-// CareerNet 비상용 로컬 데이터 로드
-function loadCareerNetBackup(): any[] | null {
-  try {
-    const backupPath = getCareerNetBackupPath();
-    if (!fs.existsSync(backupPath)) {
-      console.log('[CareerNet Backup] Backup file not found:', backupPath);
-      return null;
-    }
-    
-    const backupContent = fs.readFileSync(backupPath, 'utf-8');
-    const backupData = JSON.parse(backupContent);
-    
-    if (backupData.jobs && Array.isArray(backupData.jobs)) {
-      console.log('[CareerNet Backup] Loaded', backupData.jobs.length, 'jobs from backup');
-      console.log('[CareerNet Backup] Last updated:', backupData.lastUpdated);
-      return backupData.jobs;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('[CareerNet Backup] Error loading backup:', error);
-    return null;
-  }
-}
-
-// Q-Net 비상용 로컬 데이터 로드
-function loadQNetBackup(): string[] | null {
-  try {
-    const backupPath = getQNetBackupPath();
-    if (!fs.existsSync(backupPath)) {
-      console.log('[Q-Net Backup] Backup file not found:', backupPath);
-      return null;
-    }
-    
-    const backupContent = fs.readFileSync(backupPath, 'utf-8');
-    const backupData = JSON.parse(backupContent);
-    
-    if (backupData.certifications && Array.isArray(backupData.certifications)) {
-      console.log('[Q-Net Backup] Loaded', backupData.certifications.length, 'certifications from backup');
-      console.log('[Q-Net Backup] Last updated:', backupData.lastUpdated);
-      return backupData.certifications;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('[Q-Net Backup] Error loading backup:', error);
-    return null;
-  }
-}
-
-// Q-Net API 호출 IPC 핸들러
+// 정적 자격증 목록 IPC (data/certification-names.json)
 ipcMain.handle('qnet-search-certifications', async () => {
-  return new Promise((resolve, reject) => {
-    const apiKey = process.env.QNET_API_KEY;
-    if (!apiKey) {
-      reject(new Error('QNET_API_KEY가 설정되지 않았습니다. 인증서 파일을 선택해 주세요.'));
-      return;
-    }
-    const url = `http://openapi.q-net.or.kr/api/service/rest/InquiryListNationalQualifcationSVC/getList?ServiceKey=${apiKey}`;
-    
-    console.log('[Q-Net IPC] Calling API:', url);
-    
-    const request = http.get(url, {
-      timeout: 10000, // 10초 타임아웃
-    }, (res) => {
-      let data = '';
-      
-      console.log('[Q-Net IPC] Response status:', res.statusCode);
-      console.log('[Q-Net IPC] Response headers:', res.headers);
-      
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
-      res.on('end', () => {
-        try {
-          console.log('[Q-Net IPC] Response data length:', data.length);
-          console.log('[Q-Net IPC] Response data preview:', data.substring(0, 200));
-          
-          const certifications: string[] = [];
-          
-          // XML 또는 JSON 응답 처리
-          if (data.trim().startsWith('<?xml') || data.trim().startsWith('<')) {
-            // XML 파싱 (간단한 정규식 방식)
-            // 에러 응답 확인
-            const errorMatch = data.match(/<resultCode>(\d+)<\/resultCode>/);
-            const errorMsgMatch = data.match(/<resultMsg>([^<]*)<\/resultMsg>/);
-            
-            if (errorMatch && errorMatch[1] !== '00') {
-              const errorCode = errorMatch[1];
-              const errorMsg = errorMsgMatch ? errorMsgMatch[1] : 'Unknown error';
-              console.error(`[Q-Net IPC] API Error: Code ${errorCode}, Message: ${errorMsg}`);
-              
-              // API 오류 시 비상용 백업 데이터 사용
-              console.log('[Q-Net IPC] API failed, trying to load backup data...');
-              const backupData = loadQNetBackup();
-              if (backupData && backupData.length > 0) {
-                console.log('[Q-Net IPC] Using backup data:', backupData.length, 'certifications');
-                resolve(backupData);
-                return;
-              }
-              
-              reject(new Error(`Q-Net API 오류 (코드: ${errorCode}): ${errorMsg}`));
-              return;
-            }
-            
-            const jmfldnmMatches = data.match(/<jmfldnm[^>]*>([^<]*)<\/jmfldnm>/g);
-            if (jmfldnmMatches) {
-              jmfldnmMatches.forEach((match: string) => {
-                const name = match.replace(/<\/?jmfldnm[^>]*>/g, '').trim();
-                if (name) {
-                  certifications.push(name);
-                }
-              });
-            }
-          } else {
-            // JSON 파싱
-            const jsonData = JSON.parse(data);
-            
-            // 에러 응답 확인
-            if (jsonData.response?.header?.resultCode && jsonData.response.header.resultCode !== '00') {
-              const errorCode = jsonData.response.header.resultCode;
-              const errorMsg = jsonData.response.header.resultMsg || 'Unknown error';
-              console.error(`[Q-Net IPC] API Error: Code ${errorCode}, Message: ${errorMsg}`);
-              
-              // API 오류 시 비상용 백업 데이터 사용
-              console.log('[Q-Net IPC] API failed, trying to load backup data...');
-              const backupData = loadQNetBackup();
-              if (backupData && backupData.length > 0) {
-                console.log('[Q-Net IPC] Using backup data:', backupData.length, 'certifications');
-                resolve(backupData);
-                return;
-              }
-              
-              reject(new Error(`Q-Net API 오류 (코드: ${errorCode}): ${errorMsg}`));
-              return;
-            }
-            
-            const items = jsonData.response?.body?.items?.item || [];
-            const itemList = Array.isArray(items) ? items : (items ? [items] : []);
-            
-            itemList.forEach((item: any) => {
-              if (item.jmfldnm) {
-                certifications.push(item.jmfldnm.trim());
-              }
-            });
-          }
-          
-          // API 호출 성공 시 비상용 백업 저장
-          if (certifications.length > 0) {
-            saveQNetBackup(certifications);
-          }
-          
-          console.log('[Q-Net IPC] Successfully parsed', certifications.length, 'certifications');
-          resolve(certifications);
-        } catch (error) {
-          console.error('[Q-Net IPC] Parse error:', error);
-          console.error('[Q-Net IPC] Data that failed to parse:', data.substring(0, 500));
-          
-          // 파싱 오류 시에도 비상용 백업 데이터 시도
-          console.log('[Q-Net IPC] Parse failed, trying to load backup data...');
-          const backupData = loadQNetBackup();
-          if (backupData && backupData.length > 0) {
-            console.log('[Q-Net IPC] Using backup data:', backupData.length, 'certifications');
-            resolve(backupData);
-            return;
-          }
-          
-          reject(error);
-        }
-      });
-    });
-    
-    request.on('error', (error) => {
-      console.error('[Q-Net IPC] Request error:', error);
-      console.error('[Q-Net IPC] Error details:', error.message, (error as any).code);
-      
-      // 네트워크 오류 시 비상용 백업 데이터 사용
-      console.log('[Q-Net IPC] Network error, trying to load backup data...');
-      const backupData = loadQNetBackup();
-      if (backupData && backupData.length > 0) {
-        console.log('[Q-Net IPC] Using backup data:', backupData.length, 'certifications');
-        resolve(backupData);
-        return;
-      }
-      
-      reject(error);
-    });
-    
-    request.on('timeout', () => {
-      console.error('[Q-Net IPC] Request timeout');
-      request.destroy();
-      
-      // 타임아웃 시 비상용 백업 데이터 사용
-      console.log('[Q-Net IPC] Timeout, trying to load backup data...');
-      const backupData = loadQNetBackup();
-      if (backupData && backupData.length > 0) {
-        console.log('[Q-Net IPC] Using backup data:', backupData.length, 'certifications');
-        resolve(backupData);
-        return;
-      }
-      
-      reject(new Error('Q-Net API 요청 시간 초과'));
-    });
-  });
-});
-
-// 공인민간자격증 파일 읽기 IPC 핸들러
-// 자격증 파싱 IPC 핸들러 추가
-ipcMain.handle('parse-official-certificates', async (event, fileContent: string) => {
-  try {
-    if (!extractTablesFromDocx || !mapResumeDataToApplicationData) {
-      await loadCareerFitScoring();
-    }
-    // career-fit-scoring 모듈에서 함수 가져오기
-    const { parseOfficialCertificates } = require('career-fit-scoring');
-    return parseOfficialCertificates(fileContent);
-  } catch (e: any) {
-    try {
-      const module = requireCareerFitScoringModule();
-      return module.parseOfficialCertificates(fileContent);
-    } catch (e2: any) {
-      writeLog(`[Parse Official Certs] Error: ${e2.message || e2}`, 'error');
-      throw e2;
-    }
-  }
-});
-
-ipcMain.handle('parse-additional-national-certificates', async (event, content: string) => {
-  try {
-    if (!extractTablesFromDocx || !mapResumeDataToApplicationData) {
-      await loadCareerFitScoring();
-    }
-    const { parseAdditionalNationalCertificates } = require('career-fit-scoring');
-    return parseAdditionalNationalCertificates(content);
-  } catch (e: any) {
-    try {
-      const module = requireCareerFitScoringModule();
-      return module.parseAdditionalNationalCertificates(content);
-    } catch (e2: any) {
-      writeLog(`[Parse Additional Certs] Error: ${e2.message || e2}`, 'error');
-      throw e2;
-    }
-  }
-});
-
-ipcMain.handle('get-additional-national-certificates', async () => {
-  try {
-    if (!extractTablesFromDocx || !mapResumeDataToApplicationData) {
-      await loadCareerFitScoring();
-    }
-    const { ADDITIONAL_NATIONAL_CERTIFICATES } = require('career-fit-scoring');
-    return ADDITIONAL_NATIONAL_CERTIFICATES;
-  } catch (e: any) {
-    try {
-      const module = requireCareerFitScoringModule();
-      return module.ADDITIONAL_NATIONAL_CERTIFICATES;
-    } catch (e2: any) {
-      writeLog(`[Get Additional Certs] Error: ${e2.message || e2}`, 'error');
-      throw e2;
-    }
-  }
-});
-
-ipcMain.handle('read-official-certificates', async () => {
-  try {
-    console.log('[Official Certs IPC] Starting file search...');
-    console.log('[Official Certs IPC] __dirname:', __dirname);
-    console.log('[Official Certs IPC] process.cwd():', process.cwd());
-    console.log('[Official Certs IPC] app.getAppPath():', app.getAppPath());
-    
-    // 프로젝트 루트 찾기
-    const projectRoot = findProjectRoot();
-    
-    if (projectRoot) {
-      const filePath = path.join(projectRoot, 'certificate_official.txt');
-      if (fs.existsSync(filePath)) {
-        console.log('[Official Certs IPC] Reading file from:', filePath);
-        // 여러 인코딩 시도
-        let fileContent: string | null = null;
-        const encodings = ['utf-8', 'utf8', 'euc-kr', 'cp949'] as const;
-        
-        for (const encoding of encodings) {
-          try {
-            const buffer = fs.readFileSync(filePath);
-            if (encoding === 'utf-8' || encoding === 'utf8') {
-              fileContent = buffer.toString('utf-8');
-            } else {
-              // iconv-lite 같은 라이브러리가 필요하지만, 일단 기본 방법 시도
-              fileContent = buffer.toString('utf-8');
-            }
-            
-            // UTF-8 BOM 제거 (EF BB BF)
-            if (fileContent.charCodeAt(0) === 0xFEFF) {
-              fileContent = fileContent.slice(1);
-            }
-            
-            // 깨진 문자 확인 (Replacement Character가 많으면 다른 인코딩 시도)
-            const brokenCharCount = (fileContent.match(/\uFFFD/g) || []).length;
-            if (brokenCharCount < fileContent.length * 0.01) { // 1% 미만이면 OK
-              console.log(`[Official Certs IPC] File read with encoding: ${encoding}, broken chars: ${brokenCharCount}`);
-              break;
-            } else {
-              console.warn(`[Official Certs IPC] Too many broken characters with ${encoding}, trying next...`);
-              fileContent = null;
-            }
-          } catch (error) {
-            console.warn(`[Official Certs IPC] Failed to read with ${encoding}:`, error);
-            fileContent = null;
-          }
-        }
-        
-        if (!fileContent) {
-          // 마지막 시도: 기본 UTF-8
-          fileContent = fs.readFileSync(filePath, 'utf-8');
-          if (fileContent.charCodeAt(0) === 0xFEFF) {
-            fileContent = fileContent.slice(1);
-          }
-        }
-        
-        // 깨진 문자 제거
-        fileContent = fileContent.replace(/\uFFFD+/g, ''); // Replacement Character 제거
-        console.log('[Official Certs IPC] File read successfully, size:', fileContent.length, 'bytes');
-        return fileContent;
-      } else {
-        console.error('[Official Certs IPC] File not found at expected path:', filePath);
-      }
-    }
-    
-    // 프로젝트 루트를 찾지 못한 경우, 여러 경로 시도
-    // packaged 환경에서의 경로 확보
-    const exeDir = (() => {
-      try {
-        return app?.getPath ? path.dirname(app.getPath('exe')) : null;
-      } catch {
-        return null;
-      }
-    })();
-    const appPath = app.getAppPath();
-    const resourcesPath = (process as any).resourcesPath ? (process as any).resourcesPath : null;
-    
-    const possiblePaths = [
-      // asar 안 build-env/ (빌드 시 copy-scripts-for-build.js가 복사)
-      path.join(appPath, 'build-env', 'certificate_official.txt'),
-      // 빌드된 앱의 resources/app 경로 (files에 포함된 파일들)
-      path.join(appPath, 'certificate_official.txt'),
-      path.join(appPath, '..', 'certificate_official.txt'),
-      // resources 루트 (extraResources로 복사된 파일들)
-      resourcesPath ? path.join(resourcesPath, 'certificate_official.txt') : null,
-      resourcesPath ? path.join(resourcesPath, 'app', 'certificate_official.txt') : null,
-      resourcesPath ? path.join(resourcesPath, 'app.asar', 'certificate_official.txt') : null,
-      // exe 디렉토리 기반 경로
-      exeDir ? path.join(exeDir, 'certificate_official.txt') : null,
-      exeDir ? path.join(exeDir, 'resources', 'certificate_official.txt') : null,
-      // __dirname 기반 경로
-      path.join(__dirname, '../../..', 'certificate_official.txt'),
-      path.join(__dirname, '../..', 'certificate_official.txt'),
-      path.join(__dirname, '..', 'certificate_official.txt'),
-      // process.cwd() 기반 경로
-      path.join(process.cwd(), 'certificate_official.txt'),
-      path.join(process.cwd(), '..', 'certificate_official.txt'),
-      path.join(process.cwd(), '../..', 'certificate_official.txt'),
-      path.join(process.cwd(), '../../..', 'certificate_official.txt'),
-    ].filter((p): p is string => p !== null);
-    
-    console.log('[Official Certs IPC] Trying fallback paths:');
-    for (const filePath of possiblePaths) {
-      const exists = fs.existsSync(filePath);
-      console.log('  -', filePath, exists ? '✓' : '✗');
-      if (exists) {
-        console.log('[Official Certs IPC] Found file at:', filePath);
-        // 여러 인코딩 시도
-        let fileContent: string | null = null;
-        const encodings = ['utf-8', 'utf8', 'euc-kr', 'cp949'] as const;
-        
-        for (const encoding of encodings) {
-          try {
-            const buffer = fs.readFileSync(filePath);
-            if (encoding === 'utf-8' || encoding === 'utf8') {
-              fileContent = buffer.toString('utf-8');
-            } else {
-              // iconv-lite 같은 라이브러리가 필요하지만, 일단 기본 방법 시도
-              fileContent = buffer.toString('utf-8');
-            }
-            
-            // UTF-8 BOM 제거 (EF BB BF)
-            if (fileContent.charCodeAt(0) === 0xFEFF) {
-              fileContent = fileContent.slice(1);
-            }
-            
-            // 깨진 문자 확인 (Replacement Character가 많으면 다른 인코딩 시도)
-            const brokenCharCount = (fileContent.match(/\uFFFD/g) || []).length;
-            if (brokenCharCount < fileContent.length * 0.01) { // 1% 미만이면 OK
-              console.log(`[Official Certs IPC] File read with encoding: ${encoding}, broken chars: ${brokenCharCount}`);
-              break;
-            } else {
-              console.warn(`[Official Certs IPC] Too many broken characters with ${encoding}, trying next...`);
-              fileContent = null;
-            }
-          } catch (error) {
-            console.warn(`[Official Certs IPC] Failed to read with ${encoding}:`, error);
-            fileContent = null;
-          }
-        }
-        
-        if (!fileContent) {
-          // 마지막 시도: 기본 UTF-8
-          fileContent = fs.readFileSync(filePath, 'utf-8');
-          if (fileContent.charCodeAt(0) === 0xFEFF) {
-            fileContent = fileContent.slice(1);
-          }
-        }
-        
-        // 깨진 문자 제거
-        fileContent = fileContent.replace(/\uFFFD+/g, ''); // Replacement Character 제거
-        console.log('[Official Certs IPC] File read successfully, size:', fileContent.length, 'bytes');
-        return fileContent;
-      }
-    }
-    
-    console.warn('[Official Certs IPC] File not found in any path');
-    return null;
-  } catch (error) {
-    console.error('[Official Certs IPC] Read error:', error);
-    return null;
-  }
+  return loadCertificationNames();
 });
 
 /** 주소 문자열로 거주지 분류. 안산 → 시흥 → 경기도 → 서울 순서로 첫 매칭값 사용 */
@@ -3703,13 +3007,7 @@ ${resumeText}
    - 중: ${userPrompt.gradeCriteria?.중 || '조건 없음'}
    - 하: ${userPrompt.gradeCriteria?.하 || '조건 없음'}
 
-5. 추가 평가 항목 (업무·경력 관련 판단은 경력+경력기술서만 참조, 자기소개서 무시):
-${userPrompt.requiredQualifications && userPrompt.requiredQualifications.trim() ? '- 필수 요구사항 만족여부(requiredQual): **자격증 제외** - 위 "필수 요구사항" 텍스트에 적힌 항목(경력·학력·기타 조건 등)만 평가하세요. **경력·업무 관련 조건은 "경력"과 "경력기술서"에만 근거를 두고 판단하세요. 자기소개서는 참조하지 마세요.** 필수 자격증 보유 여부는 requiredQual에 반영하지 말고, certification 필드로만 평가하세요. 필수 요구사항을 모두 만족하면 ◎, 하나라도 불만족하면 X. 이력서에 명시되지 않은 항목은 불만족으로 평가.\n- 필수 요구사항 판단 근거(requiredQualReason): requiredQual이 ◎ 또는 X인 이유를 **필수 요구사항(자격증 제외)** 항목만 기준으로 작성하세요. 위 "필수 요구사항"에 나열된 항목별로 **경력·경력기술서** 대조 내용을 적어주세요. 자격증 관련 내용은 requiredQualReason에 넣지 마세요. 예: "① N년 이상 경력: 경력란에 A사 N년 근무 명시되어 만족. ② OO 관련 경험: 경력기술서에 △△ 프로젝트 기재되어 만족. ③ △△ 불만족: 경력·경력기술서에 해당 경험 없음."' : ''}
-${userPrompt.preferredQualifications && userPrompt.preferredQualifications.trim() ? '- 우대사항 만족여부: 우대 사항을 얼마나 만족하는지 평가 (◎=매우 만족, ○=만족, X=불만족). **경력·업무 관련은 경력과 경력기술서만 참조하고 자기소개서는 무시하세요.**' : ''}
-${userPrompt.requiredCertifications && userPrompt.requiredCertifications.length > 0 ? '- 자격증 만족여부: **중요** - 이력서의 자격사항 섹션을 정확히 확인하세요. 필수 자격증이 명시적으로 기재되어 있는지 확인하고, 자격증이 없거나 명시되지 않았다면 절대 추측하지 말고 반드시 "X"로 평가하세요. 이력서에 자격증이 없다고 명시되어 있거나 자격사항 섹션이 비어있다면 "X"입니다. 위의 자격증 평가 가이드를 참고하여, 요구하는 자격증보다 단계가 높은 자격증을 보유한 경우에도 만족한 것으로 평가하세요.' : ''}
-- 경력 적합도(careerFit): **"경력"과 "경력기술서"에 적힌 실제 경험만** 보고 업무 내용과의 적합도를 평가하세요 (◎=매우 적합, ○=적합, X=부적합, -=경력 없음). **자기소개서의 적합성 어필은 절대 반영하지 마세요.** 경력·경력기술서에 해당 업무 경험이 없으면 ◎/○로 평가하지 마세요.
-
-중요: evaluations 객체에는 위에서 언급된 항목들만 포함하세요. 예를 들어 필수 요구사항이 없으면 requiredQual 필드를 포함하지 마세요.`;
+${buildAdditionalEvaluationInstructions(userPrompt)}`;
 
   return { systemPrompt, userPromptText };
 }
@@ -3763,7 +3061,8 @@ ${singleSystemSuffix}
 2. 배열의 순서는 이력서 제시 순서(이력서 1, 이력서 2, ...)와 반드시 동일해야 합니다.
 3. **반드시 ${items.length}개 이력서 모두에 대한 평가를 배열에 포함하세요. 중간에 끊지 말고 모든 이력서(이력서 1~${items.length})에 대해 한 개씩 객체를 출력하세요.**
 4. summary와 opinion은 등급 근거가 아닌 이력서 전체에 대한 종합 평가여야 합니다. 등급 근거는 gradeEvaluations.reason에만 작성하세요.
-5. **업무 적합도 판단 시 참조 범위 (필수)**: 경력 적합도(careerFit), 필수 요구사항(requiredQual), 우대사항(preferredQual), 등급 조건 중 '업무 내용'과의 관련성을 판단할 때는 **오직 "경력"과 "경력기술서"에 적힌 내용만** 근거로 사용하세요. **자기소개서는 참조하지 마세요.** 자기소개서에 "이 업무에 적합하다"는 식의 어필만 있고 경력·경력기술서에 해당 업무 경험이 없으면 적합하다고 판단하지 마세요.`;
+5. **업무 적합도 판단 시 참조 범위 (필수)**: 경력 적합도(careerFit), 필수 요구사항(requiredQual), 우대사항(preferredQual), 등급 조건 중 '업무 내용'과의 관련성을 판단할 때는 **오직 "경력"과 "경력기술서"에 적힌 내용만** 근거로 사용하세요. **자기소개서는 참조하지 마세요.** 자기소개서에 "이 업무에 적합하다"는 식의 어필만 있고 경력·경력기술서에 해당 업무 경험이 없으면 적합하다고 판단하지 마세요.
+6. **evaluations 객체 필수**: gradeEvaluations와 함께 **evaluations 객체도 반드시** 각 이력서 JSON에 포함하세요. gradeEvaluations만 출력하고 evaluations를 생략하지 마세요.`;
 
   // user 쪽: 공통 업무/요구사항/자격증 가이드 + 각 이력서 블록
   let userPromptText = `업무 내용:
@@ -3802,8 +3101,11 @@ ${userPrompt.requiredCertifications.join(', ')}
 1. 등급 부여: 위에 제시된 등급 체계를 참고하여, 각 이력서가 어느 등급에 해당하는지 판단하세요.
 2. summary/opinion: 등급 근거가 아닌 이력서 전체에 대한 종합 평가 요약·의견을 작성하세요. 등급 근거는 gradeEvaluations.reason에만 작성하세요.
 3. gradeEvaluations: 각 등급(상, 중, 하)의 조건을 이력서 내용과 비교하여 satisfied와 reason을 작성하세요. **등급 조건 중 업무·경력 관련은 "경력"과 "경력기술서"만 참조하고 자기소개서는 무시하세요.**
-4. **경력 적합도·필수/우대(경력 관련)·등급(업무 관련) 판단 시**: **오직 "경력"과 "경력기술서"에 적힌 내용만** 근거로 사용하세요. **자기소개서는 절대 참조하지 마세요.** 자기소개서에 적합성 어필만 있고 경력·경력기술서에 해당 업무 경험이 없으면 적합하다고 판단하지 마세요.
-5. 각 이력서 평가 결과를 **제시된 순서와 동일한 순서**로 JSON 배열에 넣어 주세요.
+4. **경력 적합도·필수/우대(경력 관련)·등급(업무 관련) 판단 시**: **오직 "경력"과 "경력기술서"에 적힌 내용만** 근거로 사용하세요. **자기소개서는 절대 참조하지 마세요.**
+
+${buildAdditionalEvaluationInstructions(userPrompt)}
+
+6. 각 이력서 평가 결과를 **제시된 순서와 동일한 순서**로 JSON 배열에 넣어 주세요.
 
 각 등급의 조건:
 - 상: ${userPrompt.gradeCriteria?.상 || '조건 없음'}
@@ -3839,10 +3141,150 @@ function deriveGradeFromGradeEvaluations(gradeEvaluations: Record<string, { sati
   return null;
 }
 
+type AiEvalUserPromptContext = {
+  requiredQualifications?: string;
+  preferredQualifications?: string;
+  requiredCertifications?: string[];
+};
+
+/** 단일/배치 공통: evaluations 필드 작성 지침 */
+function buildAdditionalEvaluationInstructions(userPrompt: AiEvalUserPromptContext): string {
+  let text = `5. 추가 평가 항목 (업무·경력 관련 판단은 경력+경력기술서만 참조, 자기소개서 무시):
+`;
+  if (userPrompt.requiredQualifications && userPrompt.requiredQualifications.trim()) {
+    text += `- 필수 요구사항 만족여부(requiredQual): **자격증 제외** - 위 "필수 요구사항" 텍스트에 적힌 항목(경력·학력·기타 조건 등)만 평가하세요. **경력·업무 관련 조건은 "경력"과 "경력기술서"에만 근거를 두고 판단하세요. 자기소개서는 참조하지 마세요.** 필수 자격증 보유 여부는 requiredQual에 반영하지 말고, certification 필드로만 평가하세요. 필수 요구사항을 모두 만족하면 ◎, 하나라도 불만족하면 X. 이력서에 명시되지 않은 항목은 불만족으로 평가.
+- 필수 요구사항 판단 근거(requiredQualReason): requiredQual이 ◎ 또는 X인 이유를 **필수 요구사항(자격증 제외)** 항목만 기준으로 작성하세요. 위 "필수 요구사항"에 나열된 항목별로 **경력·경력기술서·학력·기타 이력서에 기재된 사실**을 대조해 적어주세요. 자격증 관련 내용은 requiredQualReason에 넣지 마세요.
+`;
+  }
+  if (userPrompt.preferredQualifications && userPrompt.preferredQualifications.trim()) {
+    text += `- 우대사항 만족여부(preferredQual): 우대 사항을 얼마나 만족하는지 평가 (◎=매우 만족, ○=만족, X=불만족). **경력·업무 관련은 경력과 경력기술서만 참조하고 자기소개서는 무시하세요.**
+`;
+  }
+  if (userPrompt.requiredCertifications && userPrompt.requiredCertifications.length > 0) {
+    text += `- 자격증 만족여부(certification): **중요** - 이력서의 자격사항 섹션을 정확히 확인하세요. 필수 자격증이 명시적으로 기재되어 있는지 확인하고, 자격증이 없거나 명시되지 않았다면 절대 추측하지 말고 반드시 "X"로 평가하세요.
+`;
+  }
+  text += `- 경력 적합도(careerFit): **"경력"과 "경력기술서"에 적힌 실제 경험만** 보고 업무 내용과의 적합도를 평가하세요 (◎=매우 적합, ○=적합, X=부적합, -=경력 없음). **자기소개서의 적합성 어필은 절대 반영하지 마세요.**
+
+중요: **evaluations 객체는 gradeEvaluations와 별도로 반드시 포함**하세요. gradeEvaluations만 출력하고 evaluations를 생략하지 마세요.`;
+  if (userPrompt.requiredQualifications && userPrompt.requiredQualifications.trim()) {
+    text += ` 채용 공고에 필수 요구사항이 있으므로 **모든 이력서**에 evaluations.requiredQual(◎ 또는 X)과 evaluations.requiredQualReason을 빠짐없이 작성하세요.`;
+  }
+  text += ` evaluations 객체에는 위에서 언급된 항목들만 포함하세요. 예를 들어 필수 요구사항이 없으면 requiredQual 필드를 포함하지 마세요.`;
+  return text;
+}
+
+function extractJsonObjectAt(text: string, openBraceIndex: number): string | null {
+  if (openBraceIndex < 0 || text[openBraceIndex] !== '{') return null;
+  let depth = 0;
+  let inDouble = false;
+  let escape = false;
+  for (let i = openBraceIndex; i < text.length; i++) {
+    const c = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inDouble) {
+      if (c === '\\') escape = true;
+      else if (c === '"') inDouble = false;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return text.slice(openBraceIndex, i + 1);
+    }
+  }
+  return null;
+}
+
+/** AI 원문에서 evaluations 필드가 누락된 경우 보조 추출 */
+function supplementEvaluationsFromText(report: any, aiContent: string): void {
+  if (!report || typeof report !== 'object' || !aiContent?.trim()) return;
+  const ev = report.evaluations;
+  const needsRequiredQual = !ev?.requiredQual;
+  const needsCareerFit = !ev?.careerFit;
+  const needsPreferredQual = !ev?.preferredQual;
+  const needsCertification = !ev?.certification;
+  if (!needsRequiredQual && !needsCareerFit && !needsPreferredQual && !needsCertification) return;
+
+  const keyMatch = aiContent.match(/"evaluations"\s*:\s*\{/);
+  if (keyMatch && keyMatch.index !== undefined) {
+    const braceStart = aiContent.indexOf('{', keyMatch.index);
+    const objStr = extractJsonObjectAt(aiContent, braceStart);
+    if (objStr) {
+      try {
+        const parsed = JSON.parse(objStr);
+        if (parsed && typeof parsed === 'object') {
+          report.evaluations = { ...(report.evaluations || {}), ...parsed };
+          return;
+        }
+      } catch {
+        // fall through to field-level extraction
+      }
+    }
+  }
+
+  const extractedEvaluations: Record<string, string> = {};
+  const careerFitMatch = aiContent.match(/"careerFit"\s*:\s*["']([◎○X-])["']/);
+  if (careerFitMatch) extractedEvaluations.careerFit = careerFitMatch[1];
+  const requiredQualMatch = aiContent.match(/"requiredQual"\s*:\s*["']([◎X-])["']/);
+  if (requiredQualMatch) extractedEvaluations.requiredQual = requiredQualMatch[1];
+  const requiredQualReasonMatch = aiContent.match(/"requiredQualReason"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (requiredQualReasonMatch) {
+    extractedEvaluations.requiredQualReason = requiredQualReasonMatch[1]
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .trim();
+  }
+  const preferredQualMatch = aiContent.match(/"preferredQual"\s*:\s*["']([◎○X-])["']/);
+  if (preferredQualMatch) extractedEvaluations.preferredQual = preferredQualMatch[1];
+  const certificationMatch = aiContent.match(/"certification"\s*:\s*["']([◎○X-])["']/);
+  if (certificationMatch) extractedEvaluations.certification = certificationMatch[1];
+
+  if (Object.keys(extractedEvaluations).length > 0) {
+    report.evaluations = { ...(report.evaluations || {}), ...extractedEvaluations };
+  }
+}
+
+/** 채용 설정상 필수인 evaluations 항목이 AI 응답에서 빠진 경우 기본값 보정 */
+function ensureMandatoryEvaluations(report: any, userPrompt?: AiEvalUserPromptContext): void {
+  if (!report || typeof report !== 'object' || !userPrompt) return;
+  if (!report.evaluations || typeof report.evaluations !== 'object') {
+    report.evaluations = {};
+  }
+  const ev = report.evaluations;
+
+  if (userPrompt.requiredQualifications?.trim() && !ev.requiredQual) {
+    ev.requiredQual = 'X';
+    if (!ev.requiredQualReason?.trim()) {
+      ev.requiredQualReason =
+        'AI 응답에 필수사항 만족 여부(evaluations.requiredQual)가 포함되지 않아 불만족(X)으로 처리했습니다. 이력서에 필수 요구사항 대비 정보가 부족하거나 누락된 것으로 판단됩니다.';
+    }
+    console.warn('[AI Check] evaluations.requiredQual missing — defaulted to X');
+  }
+  if (userPrompt.preferredQualifications?.trim() && !ev.preferredQual) {
+    ev.preferredQual = 'X';
+  }
+  if (userPrompt.requiredCertifications?.length && !ev.certification) {
+    ev.certification = 'X';
+  }
+  if (!ev.careerFit) {
+    ev.careerFit = '-';
+  }
+}
+
 /** 단일 파싱된 보고서 객체를 등급 매핑·유효성 검사 후 반환 (단일/배치 공용) */
 function normalizeParsedReport(
   parsed: any,
-  _fileName: string
+  _fileName: string,
+  evalContext?: AiEvalUserPromptContext,
+  aiContent?: string
 ): { grade: string; report: any; reportParsed: boolean } {
   const gradeMap: { [key: string]: string } = {
     '상': 'A', '중': 'B', '하': 'C'
@@ -3850,8 +3292,10 @@ function normalizeParsedReport(
   // 등급은 gradeEvaluations에서 만족하는 최상위만 사용. 없으면 예전 응답 호환용으로 report.grade 사용
   const derived = deriveGradeFromGradeEvaluations(parsed?.gradeEvaluations);
   const grade = derived !== null ? derived : (parsed && typeof parsed === 'object' && 'grade' in parsed ? (gradeMap[parsed.grade] || 'C') : 'C');
-  const hasRequired = parsed?.summary?.trim() && parsed?.opinion?.trim();
-  const report = parsed && typeof parsed === 'object' ? parsed : {};
+  let report = parsed && typeof parsed === 'object' ? { ...parsed } : {};
+  if (aiContent) supplementEvaluationsFromText(report, aiContent);
+  ensureMandatoryEvaluations(report, evalContext);
+  const hasRequired = report?.summary?.trim() && report?.opinion?.trim();
   return {
     grade,
     report,
@@ -3894,7 +3338,56 @@ function extractFirstJsonArray(text: string): string | null {
   return null;
 }
 
-/** 배치 AI 호출: 한 번의 API 요청으로 여러 이력서 평가, 응답 JSON 배열 파싱 후 각 항목을 순서대로 반환. debugDir 있으면 원문·파싱 결과 저장 */
+/** 배치 AI 호출: 한 번의 API 요청으로 여러 이력서 평가, 응답 JSON 배열 파싱 후 각 항목을 순서대로 반환. debugDir 있으면 이력서별 AI 원문·파싱 결과 저장 */
+function getResumeDebugBaseName(filePath: string | undefined, fileName: string): string {
+  const name = filePath ? path.basename(filePath) : fileName;
+  const ext = path.extname(name);
+  const base = ext ? name.slice(0, -ext.length) : name;
+  return base.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_') || 'resume';
+}
+
+function savePerResumeAiDebug(
+  debugDir: string,
+  fileNames: string[],
+  filePaths: string[] | undefined,
+  aiContent: string,
+  parsedArray: any[] | null,
+  batchTimestamp: string
+): void {
+  try {
+    if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
+
+    if (fileNames.length === 1) {
+      const base = getResumeDebugBaseName(filePaths?.[0], fileNames[0]);
+      const rawPath = path.join(debugDir, `${base}_ai-response.txt`);
+      fs.writeFileSync(rawPath, aiContent, 'utf-8');
+      console.log('[AI Check Batch] Per-resume raw saved:', rawPath, `(${aiContent.length} chars)`);
+      writeLog(`[AI Check Batch] Per-resume raw saved: ${rawPath}`, 'info');
+      if (parsedArray?.[0] != null) {
+        const parsedPath = path.join(debugDir, `${base}_ai-parsed.json`);
+        fs.writeFileSync(parsedPath, JSON.stringify(parsedArray[0], null, 2), 'utf-8');
+        console.log('[AI Check Batch] Per-resume parsed saved:', parsedPath);
+      }
+      return;
+    }
+
+    const batchRawPath = path.join(debugDir, `ai-response-batch-${batchTimestamp}.txt`);
+    fs.writeFileSync(batchRawPath, aiContent, 'utf-8');
+    console.log('[AI Check Batch] Batch raw saved:', batchRawPath);
+    for (let i = 0; i < fileNames.length; i++) {
+      const base = getResumeDebugBaseName(filePaths?.[i], fileNames[i]);
+      if (parsedArray?.[i] != null) {
+        const parsedPath = path.join(debugDir, `${base}_ai-parsed.json`);
+        fs.writeFileSync(parsedPath, JSON.stringify(parsedArray[i], null, 2), 'utf-8');
+        console.log('[AI Check Batch] Per-resume parsed saved:', parsedPath);
+      }
+    }
+  } catch (e: any) {
+    console.warn('[AI Check Batch] Failed to save debug output:', e?.message);
+    writeLog(`[AI Check Batch] Debug save failed: ${e?.message || e}`, 'warn');
+  }
+}
+
 async function callAIAndParseBatch(
   systemPrompt: string,
   userPromptText: string,
@@ -3902,7 +3395,9 @@ async function callAIAndParseBatch(
   retryCount: number = 0,
   debugDir: string | null = null,
   aiModel?: string,
-  aiModelId?: string
+  aiModelId?: string,
+  filePaths?: string[],
+  evalContext?: AiEvalUserPromptContext
 ): Promise<Array<{ success: boolean; grade: string; report: any; reportParsed: boolean; fileName: string; error?: string }>> {
   const MAX_RETRIES = 1;
   const provider = aiModel || 'gpt';
@@ -3921,19 +3416,7 @@ async function callAIAndParseBatch(
     console.log(`[AI Check Batch] Calling ${provider} API (${modelId}) for ${fileNames.length} files${retryCount > 0 ? ` (재시도 ${retryCount})` : ''}`);
     const aiContent = await callProviderApi(provider, modelId, systemPrompt, userPromptText, 16384);
 
-    // 디버그: AI 원문 응답 저장 및 로그
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
-    if (debugDir) {
-      try {
-        if (!fs.existsSync(debugDir)) fs.mkdirSync(debugDir, { recursive: true });
-        const rawPath = path.join(debugDir, `ai-response-${ts}.txt`);
-        fs.writeFileSync(rawPath, aiContent, 'utf-8');
-        console.log('[AI Check Batch] Raw response saved:', rawPath, `(${aiContent.length} chars)`);
-        writeLog(`[AI Check Batch] Raw response saved: ${rawPath}`, 'info');
-      } catch (e: any) {
-        console.warn('[AI Check Batch] Failed to save raw response:', e?.message);
-      }
-    }
     if (aiContent.length > 0) {
       const preview = aiContent.length <= 600 ? aiContent : aiContent.slice(0, 300) + '\n... (truncated) ...\n' + aiContent.slice(-300);
       console.log('[AI Check Batch] AI response preview:\n', preview);
@@ -3959,29 +3442,20 @@ async function callAIAndParseBatch(
     } catch (parseErr) {
       console.warn('[AI Check Batch] Response is not valid JSON array:', (parseErr as Error).message);
       if (debugDir) {
-        try {
-          const failPath = path.join(debugDir, `ai-response-${ts}-PARSE_FAILED.txt`);
-          fs.writeFileSync(failPath, aiContent, 'utf-8');
-          console.log('[AI Check Batch] Raw response (parse failed) saved:', failPath);
-        } catch (_e) {}
+        savePerResumeAiDebug(debugDir, fileNames, filePaths, aiContent, null, ts);
       }
       return fileNames.map(fn => emptyResult(fn, '배치 응답 JSON 배열 파싱 실패'));
     }
 
     if (!Array.isArray(arr)) {
+      if (debugDir) {
+        savePerResumeAiDebug(debugDir, fileNames, filePaths, aiContent, null, ts);
+      }
       return fileNames.map(fn => emptyResult(fn, '배치 응답이 배열이 아님'));
     }
 
-    // 디버그: 파싱된 배열 저장
     if (debugDir) {
-      try {
-        const parsedPath = path.join(debugDir, `ai-parsed-${ts}.json`);
-        fs.writeFileSync(parsedPath, JSON.stringify(arr, null, 2), 'utf-8');
-        console.log('[AI Check Batch] Parsed array saved:', parsedPath, `(${arr.length} items)`);
-        writeLog(`[AI Check Batch] Parsed array saved: ${parsedPath}`, 'info');
-      } catch (e: any) {
-        console.warn('[AI Check Batch] Failed to save parsed JSON:', e?.message);
-      }
+      savePerResumeAiDebug(debugDir, fileNames, filePaths, aiContent, arr, ts);
     }
 
     const results: Array<{ success: boolean; grade: string; report: any; reportParsed: boolean; fileName: string; error?: string }> = [];
@@ -3992,7 +3466,8 @@ async function callAIAndParseBatch(
         results.push(emptyResult(fileName, '배치 응답에 해당 순서의 항목 없음'));
         continue;
       }
-      const { grade, report, reportParsed } = normalizeParsedReport(raw, fileName);
+      const itemContent = fileNames.length === 1 ? aiContent : undefined;
+      const { grade, report, reportParsed } = normalizeParsedReport(raw, fileName, evalContext, itemContent);
       results.push({
         success: true,
         grade,
@@ -4001,6 +3476,28 @@ async function callAIAndParseBatch(
         fileName,
       });
     }
+
+    const missingRequiredQual =
+      evalContext?.requiredQualifications?.trim() &&
+      results.some((r) => r.success && !r.report?.evaluations?.requiredQual);
+    if (missingRequiredQual && retryCount < MAX_RETRIES) {
+      console.warn('[AI Check Batch] evaluations.requiredQual missing — retrying with stricter prompt');
+      const retrySystemPrompt =
+        systemPrompt +
+        '\n\n[재시도 필수] 각 이력서 JSON 객체에 evaluations 객체를 **반드시** 포함하세요. 필수 요구사항이 있으면 evaluations.requiredQual(◎ 또는 X)과 evaluations.requiredQualReason을 빠짐없이 작성하세요. gradeEvaluations만 출력하고 evaluations를 생략하지 마세요.';
+      return callAIAndParseBatch(
+        retrySystemPrompt,
+        userPromptText,
+        fileNames,
+        retryCount + 1,
+        debugDir,
+        aiModel,
+        aiModelId,
+        filePaths,
+        evalContext
+      );
+    }
+
     console.log('[AI Check Batch] Success for', fileNames.length, 'files');
     return results;
   } catch (error) {
@@ -4130,6 +3627,7 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
     scoringWeights?: Record<string, number>;
   };
   items: Array<{ applicationData: any; fileName: string; filePath: string }>;
+  debugMode?: boolean;
   debugFolder?: string;
   batchSize?: number;
   aiModel?: string;
@@ -4178,7 +3676,9 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
       gradeCriteria: data.userPrompt.gradeCriteria || {},
       scoringWeights: data.userPrompt.scoringWeights || {},
     };
-    const debugDir = !app.isPackaged && data.debugFolder ? path.join(data.debugFolder, 'debug') : null;
+    const debugDir = data.debugMode && data.debugFolder
+      ? path.join(data.debugFolder, 'debug')
+      : null;
 
     for (let start = 0; start < items.length; start += batchSize) {
       const chunk = items.slice(start, start + batchSize);
@@ -4195,7 +3695,21 @@ ipcMain.handle('ai-check-resume-batch-full', async (event, data: {
       let retryCount = 0;
       while (retryCount < AI_BATCH_FULL_MAX_RETRIES) {
         try {
-          batchResults = await callAIAndParseBatch(systemPrompt, userPromptText, fileNames, 0, debugDir, selectedModel, selectedModelId);
+          batchResults = await callAIAndParseBatch(
+            systemPrompt,
+            userPromptText,
+            fileNames,
+            0,
+            debugDir,
+            selectedModel,
+            selectedModelId,
+            chunk.map(({ filePath }) => filePath),
+            {
+              requiredQualifications: userPrompt.requiredQualifications,
+              preferredQualifications: userPrompt.preferredQualifications,
+              requiredCertifications: userPrompt.requiredCertifications,
+            }
+          );
           break;
         } catch (err: any) {
           const msg = err?.message || 'AI 분석 실패';
@@ -4431,200 +3945,3 @@ function formatResumeDataForAI(applicationData: any): string {
 
   return text || '이력서 정보가 없습니다.';
 }
-
-// CareerNet API 호출 IPC 핸들러
-ipcMain.handle('careernet-search-jobs', async () => {
-  return new Promise((resolve, reject) => {
-    const apiKey = process.env.CAREERNET_API_KEY;
-    if (!apiKey) {
-      reject(new Error('CAREERNET_API_KEY가 설정되지 않았습니다. 인증서 파일을 선택해 주세요.'));
-      return;
-    }
-    const url = `https://www.career.go.kr/cnet/openapi/getOpenApi?apiKey=${apiKey}&svcType=api&svcCode=JOB&contentType=json&thisPage=1&perPage=9999`;
-    
-    console.log('[CareerNet IPC] Calling API:', url);
-    
-    const request = https.get(url, {
-      timeout: 10000, // 10초 타임아웃
-    }, (res) => {
-      let data = '';
-      
-      console.log('[CareerNet IPC] Response status:', res.statusCode);
-      
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
-      res.on('end', () => {
-        try {
-          console.log('[CareerNet IPC] Response data length:', data.length);
-          
-          const jsonData = JSON.parse(data);
-          const jobs: any[] = [];
-          
-          if (jsonData.dataSearch?.content) {
-            const contentList = Array.isArray(jsonData.dataSearch.content) 
-              ? jsonData.dataSearch.content 
-              : [jsonData.dataSearch.content];
-            
-            contentList.forEach((item: any) => {
-              const job = item.job?.trim();
-              const jobdicSeq = item.jobdicSeq?.trim();
-              
-              if (job && jobdicSeq) {
-                jobs.push({
-                  job: job,
-                  jobdicSeq: jobdicSeq,
-                  aptd_type_code: item.aptd_type_code?.trim(),
-                  summary: item.summary?.trim(),
-                  profession: item.profession?.trim(),
-                  similarJob: item.similarJob?.trim(),
-                });
-              }
-            });
-          }
-          
-          // API 호출 성공 시 비상용 백업 저장
-          if (jobs.length > 0) {
-            saveCareerNetBackup(jobs);
-          }
-          
-          console.log('[CareerNet IPC] Successfully parsed', jobs.length, 'jobs');
-          resolve(jobs);
-        } catch (error) {
-          console.error('[CareerNet IPC] Parse error:', error);
-          console.error('[CareerNet IPC] Data that failed to parse:', data.substring(0, 500));
-          
-          // 파싱 오류 시에도 비상용 백업 데이터 시도
-          console.log('[CareerNet IPC] Parse failed, trying to load backup data...');
-          const backupData = loadCareerNetBackup();
-          if (backupData && backupData.length > 0) {
-            console.log('[CareerNet IPC] Using backup data:', backupData.length, 'jobs');
-            resolve(backupData);
-            return;
-          }
-          
-          reject(error);
-        }
-      });
-    });
-    
-    request.on('error', (error) => {
-      console.error('[CareerNet IPC] Request error:', error);
-      console.error('[CareerNet IPC] Error details:', error.message, (error as any).code);
-      
-      // 네트워크 오류 시 비상용 백업 데이터 사용
-      console.log('[CareerNet IPC] Network error, trying to load backup data...');
-      const backupData = loadCareerNetBackup();
-      if (backupData && backupData.length > 0) {
-        console.log('[CareerNet IPC] Using backup data:', backupData.length, 'jobs');
-        resolve(backupData);
-        return;
-      }
-      
-      reject(error);
-    });
-    
-    request.on('timeout', () => {
-      console.error('[CareerNet IPC] Request timeout');
-      request.destroy();
-      
-      // 타임아웃 시 비상용 백업 데이터 사용
-      console.log('[CareerNet IPC] Timeout, trying to load backup data...');
-      const backupData = loadCareerNetBackup();
-      if (backupData && backupData.length > 0) {
-        console.log('[CareerNet IPC] Using backup data:', backupData.length, 'jobs');
-        resolve(backupData);
-        return;
-      }
-      
-      reject(new Error('CareerNet API 요청 시간 초과'));
-    });
-  });
-});
-
-// CareerNet 직종 상세 정보 조회 IPC 핸들러
-ipcMain.handle('careernet-get-job-detail', async (event, jobdicSeq: string) => {
-  return new Promise((resolve, reject) => {
-    const apiKey = process.env.CAREERNET_API_KEY;
-    if (!apiKey) {
-      return null;
-    }
-    const url = `https://www.career.go.kr/cnet/openapi/getOpenApi?apiKey=${apiKey}&svcType=api&svcCode=JOB_VIEW&jobdicSeq=${jobdicSeq}`;
-    
-    console.log('[CareerNet IPC] Getting job detail:', url);
-    
-    const request = https.get(url, {
-      timeout: 10000,
-    }, (res) => {
-      let data = '';
-      
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      
-      res.on('end', () => {
-        try {
-          // XML 또는 JSON 응답 처리
-          if (data.trim().startsWith('<?xml') || data.trim().startsWith('<')) {
-            // XML 파싱 (간단한 정규식 방식)
-            const result: any = {};
-            
-            // capacity_major 추출
-            const capacityMajorMatches = data.match(/<capacity_major[^>]*>([\s\S]*?)<\/capacity_major>/g);
-            if (capacityMajorMatches) {
-              const capacities: string[] = [];
-              capacityMajorMatches.forEach(match => {
-                const capacityMatches = match.match(/<capacity[^>]*>([^<]*)<\/capacity>/g);
-                if (capacityMatches) {
-                  capacityMatches.forEach(capMatch => {
-                    const capacity = capMatch.replace(/<\/?capacity[^>]*>/g, '').trim();
-                    if (capacity) {
-                      capacities.push(capacity);
-                    }
-                  });
-                }
-              });
-              
-              if (capacities.length > 0) {
-                result.capacity_major = {
-                  content: capacities.map(cap => ({ capacity: cap })),
-                };
-              }
-            }
-            
-            resolve(result);
-          } else {
-            // JSON 파싱
-            const jsonData = JSON.parse(data);
-            
-            if (jsonData.dataSearch?.content) {
-              const content = Array.isArray(jsonData.dataSearch.content)
-                ? jsonData.dataSearch.content[0]
-                : jsonData.dataSearch.content;
-              
-              resolve(content);
-            } else {
-              resolve(null);
-            }
-          }
-        } catch (error) {
-          console.error('[CareerNet IPC] Parse error:', error);
-          console.error('[CareerNet IPC] Data preview:', data.substring(0, 200));
-          reject(error);
-        }
-      });
-    });
-    
-    request.on('error', (error) => {
-      console.error('[CareerNet IPC] Request error:', error);
-      reject(error);
-    });
-    
-    request.on('timeout', () => {
-      console.error('[CareerNet IPC] Request timeout');
-      request.destroy();
-      reject(new Error('CareerNet API 요청 시간 초과'));
-    });
-  });
-});

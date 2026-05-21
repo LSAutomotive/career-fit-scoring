@@ -6,8 +6,7 @@
  *
  * 복사 대상:
  *   ../scripts/*.py       → electron-app/py-scripts/    (asarUnpack — python.exe가 직접 읽음)
- *   ../certificate_official.txt → electron-app/build-env/certificate_official.txt (asar 안)
- *   (.env는 사용하지 않음 — API 키는 인증서 .enc 파일로만 로드)
+ *   ../data/certification-names.json → electron-app/build-env/certification-names.json (asar 안)
  */
 const fs = require('fs');
 const path = require('path');
@@ -45,7 +44,7 @@ for (const file of scriptFiles) {
 console.log(`[copy-build-assets] OK: ${scriptCount}개 .py 파일 → ${scriptsDest}`);
 
 // ──────────────────────────────────────────────
-// 2. .env + certificate_official.txt 복사
+// 2. 정적 자격증 목록 JSON 복사
 // ──────────────────────────────────────────────
 const buildEnvDest = path.join(electronAppRoot, 'build-env');
 if (fs.existsSync(buildEnvDest)) {
@@ -53,13 +52,23 @@ if (fs.existsSync(buildEnvDest)) {
 }
 fs.mkdirSync(buildEnvDest, { recursive: true });
 
-console.log('[copy-build-assets] === certificate_official.txt ===');
+console.log('[copy-build-assets] === certification-names.json ===');
 
-const certOfficialSrc = path.join(projectRoot, 'certificate_official.txt');
-const certOfficialDest = path.join(buildEnvDest, 'certificate_official.txt');
-if (fs.existsSync(certOfficialSrc)) {
-  fs.copyFileSync(certOfficialSrc, certOfficialDest);
-  console.log('[copy-build-assets] OK: certificate_official.txt → ' + buildEnvDest);
-} else {
-  console.warn('[copy-build-assets] WARN: certificate_official.txt 없음 (' + certOfficialSrc + ') — 건너뜀');
+const certNamesSrc = path.join(projectRoot, 'data', 'certification-names.json');
+const certNamesDest = path.join(buildEnvDest, 'certification-names.json');
+if (!fs.existsSync(certNamesSrc)) {
+  console.error('[copy-build-assets] ERROR: certification-names.json 없음 (' + certNamesSrc + ')');
+  console.error('[copy-build-assets] 먼저 node scripts/generate-certification-names.js 를 실행하세요.');
+  process.exit(1);
 }
+
+const certData = JSON.parse(fs.readFileSync(certNamesSrc, 'utf8'));
+const packaged = {
+  version: certData.version,
+  lastUpdated: certData.lastUpdated,
+  count: certData.count,
+  sources: certData.sources,
+  certifications: certData.certifications,
+};
+fs.writeFileSync(certNamesDest, JSON.stringify(packaged, null, 2), 'utf8');
+console.log('[copy-build-assets] OK: certification-names.json (' + packaged.count + '건) → ' + buildEnvDest);

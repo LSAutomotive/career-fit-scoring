@@ -55,6 +55,7 @@ function App() {
   // "실행하기"를 누른 시점의 설정 스냅샷 (뒤로가기 시 이 값으로 복원)
   const [executedSnapshot, setExecutedSnapshot] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [debugMode, setDebugMode] = useState<boolean>(false);
   const [aiProgress, setAiProgress] = useState<{ current: number; total: number; currentFile: string; estimatedTimeRemainingMs?: number; phase?: 'parsing' | 'ai'; concurrency?: number } | null>(null);
   
   // 업데이트 관련 상태
@@ -263,6 +264,7 @@ function App() {
             jobMetadata={jobMetadata}
             aiModel={aiModel}
             aiModelId={aiModelId}
+            debugMode={debugMode}
           />
         </div>
         {isProcessing && <LoadingSpinner message="이력서 분석 중..." fullScreen progress={aiProgress || undefined} />}
@@ -424,9 +426,17 @@ function App() {
           >
             실행하기
           </button>
+          <label className="debug-mode-toggle" title="켜면 AI 분석 원문 응답을 이력서 폴더/debug/에 이력서별로 저장합니다">
+            <input
+              type="checkbox"
+              checked={debugMode}
+              onChange={(e) => setDebugMode(e.target.checked)}
+            />
+            디버그 모드
+          </label>
         </div>
         <div className="app-version-info">
-          Copyright Ⓒ 2026 LS Automotive Technologies. All rights reserved. | Version {import.meta.env.VITE_APP_VERSION || '1.3.8'}
+          Copyright Ⓒ 2026 LS Automotive Technologies. All rights reserved. | Version {import.meta.env.VITE_APP_VERSION || '1.4.0'}
         </div>
       </div>
       {showPromptsModal && (

@@ -35,9 +35,6 @@ export default defineConfig({
     },
   },
   define: {
-    // API 키는 메인 프로세스에서 cert로만 로드. 렌더러에는 주입하지 않음
-    'process.env.CAREERNET_API_KEY': JSON.stringify(process.env.CAREERNET_API_KEY || ''),
-    'process.env.QNET_API_KEY': JSON.stringify(process.env.QNET_API_KEY || ''),
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(appVersion),
   },
 });

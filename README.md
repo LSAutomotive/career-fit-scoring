@@ -14,7 +14,7 @@
 - **진행률·ETA**: 파싱/AI 단계별 진행률 및 예상 남은 시간 표시
 - **채용 설정 UI**: 직종·필수/우대·자격증·등급별 조건·점수 가중치 설정, 저장/불러오기
 - **직종·자격 목록**: 채용 설정 시 직종/자격증 목록을 커리어넷·Q-Net API로 조회 (메인 프로세스에서 호출, 비상 시 로컬 백업 사용)
-- **인증서 기반 API 키**: 앱 실행 시 회사 발급 **암호화 인증서(.enc)** 를 선택·검증한 뒤 메인 프로세스에서만 `process.env`에 반영 (렌더러 번들에 키 미주입)
+- **오프라인 자격증 검색**: Q-Net·공인민간·추가 국가자격을 병합한 정적 목록(`data/certification-names.json`) 사용 — API 키·`.env` 불필요
 - **결과·엑셀**: 테이블 정렬/필터, 상세 패널(증명사진, AI 코멘트), 선택 후보 **엑셀(.xlsx)보내기** (기본 정보 + AI등급·종합점수·경력/필수/우대/자격 만족도 등)
 - **자동 업데이트**: electron-updater 지원
 - **프롬프트 미리보기**: 설정·결과 화면에서 AI에 전달되는 System/User 프롬프트 확인
@@ -191,22 +191,16 @@ PDF 파싱은 **pdftotext(poppler)만** 사용합니다(레거시 pdfminer.six·
 - **관련 학과** (10점): MAJOR_NM 일치 10점, MAJOR_SEQ만 일치 7점
 - **학점** (5점): 88%↑ 5점, 66%↑ 2점
 
-## API 키·인증서 (.enc)
+## 자격증 목록·API 키
 
-**배포·실사용**에서는 회사에서 발급한 **암호화 인증서 파일(.enc)** 을 사용합니다.
+**자격증 검색**은 Q-Net/CareerNet API를 런타임에 호출하지 않습니다. `data/certification-names.json`(Q-Net·공인민간·추가 국가자격 병합)을 앱에 포함해 오프라인으로 사용합니다.
 
-- 앱 기동 시 **Electron 메인 프로세스**가 `.enc`를 읽어 **AES-256-CBC**로 복호화하고, 내부 **서명 필드**가 일치할 때만 내용을 `key=value` 형태로 파싱해 `process.env`에 적용합니다.
-- 인증서에 포함할 수 있는 변수 예: `CAREERNET_API_KEY`, `QNET_API_KEY` 등(팀 정책에 따름). 이력서 AI 평가용 키는 앱 **API 키 설정**에서 등록합니다.
-- 마지막으로 선택한 `.enc` **파일 경로**만 사용자 데이터 폴더의 `cert-config.json`(패키지 앱) 또는 `cert-config-dev.json`(개발 모드)에 저장되며, **키 평문은 저장하지 않습니다.**
-- **React(렌더러)** 쪽 번들에는 API 키를 주입하지 않습니다(`vite.config`에서도 키는 렌더러용으로 넣지 않음).
-
-**로컬 개발** 시에는 (1) 위와 같이 `.enc`를 선택해 경로를 저장하거나, (2) 터미널/IDE에서 `process.env`에 필요한 변수를 미리 설정한 뒤 `npm run dev`로 Electron을 띄우는 방식을 병행할 수 있습니다. 루트 `.env`는 저장소에 커밋하지 말고, 팀 가이드에 따라 로컬 전용으로만 사용하세요.
+- 목록 갱신(개발자용): 루트에서 `npm run generate-cert-names` (`.env`의 `QNET_API_KEY`로 1회 fetch; `certificate_official.txt`가 있으면 함께 병합)
+- **이력서 AI 평가**용 OpenAI/Gemini/Claude 키는 앱 **API 키 설정** UI에서 등록합니다. `.env` 없이도 자격증 검색·이력서 분석(키 설정 후)이 가능합니다.
 
 ```bash
-# 로컬 개발 시 참고용 (예시 — 실제 값은 비밀 관리 정책에 따름)
-# 커리어넷/Q-Net은 메인 프로세스 환경 변수로 주입 가능. 이력서 AI 키는 앱 API 키 설정에서 등록.
-CAREERNET_API_KEY=your_api_key
-QNET_API_KEY=your_api_key
+# 자격증 목록 재생성 (선택, 개발 환경)
+npm run generate-cert-names
 ```
 
 ## 기술 스택

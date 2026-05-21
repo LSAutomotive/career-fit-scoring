@@ -221,6 +221,7 @@ interface ResultViewProps {
   jobMetadata?: any; // App.tsx에서 전달하는 jobMetadata
   aiModel?: string;
   aiModelId?: string;
+  debugMode?: boolean;
 }
 
 type SortField = 'name' | 'age' | 'lastCompany' | 'residence' | 'totalScore' | 'aiGrade' | 'status' | 'careerFit' | 'requiredQual' | 'preferredQual' | 'certification';
@@ -277,7 +278,7 @@ function getLatestCareer(app: any): { company: string; department: string; salar
   return { company: entries[0].company, department: entries[0].department, salary: entries[0].salary };
 }
 
-export default function ResultView({ selectedFiles, userPrompt, selectedFolder, onBack, onProcessingChange, onProgressChange, jobMetadata, aiModel, aiModelId }: ResultViewProps) {
+export default function ResultView({ selectedFiles, userPrompt, selectedFolder, onBack, onProcessingChange, onProgressChange, jobMetadata, aiModel, aiModelId, debugMode = false }: ResultViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortField, setSortField] = useState<SortField>('totalScore');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -1249,7 +1250,8 @@ export default function ResultView({ selectedFiles, userPrompt, selectedFolder, 
           resp = await window.electron!.aiCheckResumeBatchFull({
             userPrompt,
             items: needsAnalysisForBatch.map(r => ({ applicationData: r.applicationData, fileName: r.fileName, filePath: r.filePath })),
-            debugFolder: selectedFolder || undefined,
+            debugMode: debugMode === true,
+            debugFolder: debugMode && selectedFolder ? selectedFolder : undefined,
             batchSize: BATCH_SIZE,
             aiModel: aiModel || 'gpt',
             aiModelId: aiModelId || 'gpt-5.4',

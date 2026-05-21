@@ -2,17 +2,24 @@ import { useState, useEffect, useRef } from 'react';
 // career-fit-scoring은 Node.js 전용이므로 IPC로 처리
 import '../styles/job-config-form.css';
 
+/** API 키 미등록 등으로 실패한 경우, 왼쪽 하단 설정 버튼 안내를 덧붙입니다. */
+function formatGradeCriteriaError(message: string): string {
+  if (!/API\s*키|api\s*key/i.test(message)) return message;
+  if (/왼쪽 아래/.test(message) && /API 키 설정/.test(message)) return message;
+
+  let base = message.trim();
+  base = base.replace(/[.\s]*API\s*키\s*설정에서\s*키를\s*등록해\s*주세요\.?/gi, '');
+  base = base.replace(/[.。\s]+$/, '');
+
+  return `${base}. 화면 왼쪽 아래 「API 키 설정」 버튼에서 키를 등록해 주세요.`;
+}
+
 // Electron API 타입
 declare global {
   interface Window {
     electron?: {
       selectFolder: () => Promise<string | null>;
       qnetSearchCertifications: () => Promise<string[]>;
-      readOfficialCertificates: () => Promise<string | null>;
-      parseOfficialCertificates: (fileContent: string) => Promise<string[]>;
-      readImageAsBase64: (imagePath: string) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
-      parseAdditionalNationalCertificates: (content: string) => Promise<string[]>;
-      getAdditionalNationalCertificates: () => Promise<string>;
       generateGradeCriteria: (jobDescription: string, aiModel?: string, aiModelId?: string) => Promise<{ success: boolean; gradeCriteria?: { 상: string; 중: string; 하: string }; error?: string }>;
     };
   }
@@ -172,7 +179,7 @@ export default function JobConfigForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documentType]); // selectedFolder, onFolderChange는 의존성에서 제외 (무한 루프 방지)
 
-  // 전체 자격증 데이터 로드
+  // 전체 자격증 데이터 로드 (정적 certification-names.json)
   const loadAllCertifications = async (): Promise<Array<{ name: string; code?: string }>> => {
     if (allCertsCacheRef.current) {
       return allCertsCacheRef.current;
@@ -184,62 +191,15 @@ export default function JobConfigForm({
 
     setLoadingCerts(true);
     try {
-      const allCerts: Array<{ name: string; code?: string }> = [];
-      
-      // Q-Net API (Electron 메인 프로세스를 통해 호출)
-      try {
-        if (window.electron?.qnetSearchCertifications) {
-          const qnetCerts = await window.electron.qnetSearchCertifications();
-          qnetCerts.forEach(certName => {
-            allCerts.push({ name: certName });
-          });
-          console.log('[Load Certs] Q-Net: Loaded', qnetCerts.length, 'certifications');
-        } else {
-          console.warn('[Load Certs] Q-Net API not available (not in Electron)');
-        }
-      } catch (error) {
-        console.error('[Load Certs] Q-Net API error:', error);
+      if (!window.electron?.qnetSearchCertifications) {
+        console.warn('[Load Certs] Electron IPC not available');
+        setLoadingCerts(false);
+        return [];
       }
-      
-      // 공인민간자격증 파일 (Electron 메인 프로세스를 통해 읽기)
-      try {
-        if (window.electron?.readOfficialCertificates) {
-          const fileContent = await window.electron.readOfficialCertificates();
-          if (fileContent) {
-            if (window.electron?.parseOfficialCertificates) {
-              const officialCerts = await window.electron.parseOfficialCertificates(fileContent);
-              officialCerts.forEach(cert => {
-                allCerts.push({ name: cert });
-              });
-              console.log('[Load Certs] Official: Loaded', officialCerts.length, 'certifications');
-            } else {
-              console.warn('[Load Certs] parseOfficialCertificates not available');
-            }
-          } else {
-            console.warn('[Load Certs] Official certs file not found');
-          }
-        } else {
-          console.warn('[Load Certs] Official certs not available (not in Electron)');
-        }
-      } catch (error) {
-        console.error('[Load Certs] Official certs parse error:', error);
-      }
-      
-      // 추가 국가자격증
-      try {
-        if (window.electron?.getAdditionalNationalCertificates && window.electron?.parseAdditionalNationalCertificates) {
-          const additionalCertsContent = await window.electron.getAdditionalNationalCertificates();
-          const additionalCerts = await window.electron.parseAdditionalNationalCertificates(additionalCertsContent);
-          additionalCerts.forEach(certName => {
-            allCerts.push({ name: certName });
-          });
-        } else {
-          console.warn('[Load Certs] Additional certs functions not available');
-        }
-      } catch (error) {
-        console.error('[Load Certs] Additional certs error:', error);
-      }
-      
+
+      const certNames = await window.electron.qnetSearchCertifications();
+      const allCerts = certNames.map((name) => ({ name }));
+      console.log('[Load Certs] Loaded', allCerts.length, 'certifications from static list');
       allCertsCacheRef.current = allCerts;
       setLoadingCerts(false);
       return allCerts;
@@ -735,10 +695,12 @@ export default function JobConfigForm({
                             setValidationErrors({ ...validationErrors, gradeCriteria: { 상: false, 중: false, 하: false } });
                           }
                         } else {
-                          setGradeCriteriaError(res?.error || '기준 생성에 실패했습니다.');
+                          setGradeCriteriaError(formatGradeCriteriaError(res?.error || '기준 생성에 실패했습니다.'));
                         }
                       } catch (e) {
-                        setGradeCriteriaError(e instanceof Error ? e.message : '오류가 발생했습니다.');
+                        setGradeCriteriaError(
+                          formatGradeCriteriaError(e instanceof Error ? e.message : '오류가 발생했습니다.')
+                        );
                       } finally {
                         setGradeCriteriaGenerating(false);
                       }

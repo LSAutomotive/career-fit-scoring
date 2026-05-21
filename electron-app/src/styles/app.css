@@ -134,6 +134,25 @@
   background-color: #030f1f;
 }
 
+.debug-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  color: #374151;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.debug-mode-toggle input {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+  accent-color: #072761;
+}
+
 .app-version-info {
   font-size: 0.75rem;
   color: #6b7280;
